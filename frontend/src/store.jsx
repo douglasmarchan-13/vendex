@@ -3,7 +3,7 @@ import { COUNTRIES, seed } from './data/mock'
 import { convert, fmtMoney, toUSD } from './lib/money'
 import { at } from './lib/dates'
 
-const KEY = 'vendex-demo-v2'
+const KEY = 'vendex-demo-v3'
 const UIKEY = 'vendex-ui-v1'
 const Ctx = createContext(null)
 
@@ -123,6 +123,58 @@ export function AppProvider({ children }) {
           }),
           closing ? 'success' : undefined
         )
+        // Al cerrar una venta, Vendex pide definir cómo se va a cobrar
+        if (closing && !dataRef.current.payments.some((p) => p.dealId === dealId)) setModal({ type: 'plan', dealId })
+      },
+
+      /* ---------- Cobranza ---------- */
+      createPlan(dealId, items, firstPaid) {
+        const deal = dataRef.current.deals.find((x) => x.id === dealId)
+        if (!deal) return
+        const now = new Date().toISOString()
+        setData((d) => ({
+          ...d,
+          payments: [
+            ...d.payments.filter((p) => p.dealId !== dealId || p.paidAt),
+            ...items.map((it, i) => ({
+              id: newId('p'), dealId, contactId: deal.contactId, currency: deal.currency,
+              n: it.n, of: it.of, label: it.label, amount: it.amount, dueAt: at(it.dueDays, 9),
+              ...(firstPaid && i === 0 ? { paidAt: now, method: firstPaid, ref: '' } : {}),
+            })),
+          ],
+        }))
+        toast(`Plan de cobro creado: ${items.length} pago${items.length > 1 ? 's' : ''}. Te avisaré antes de cada vencimiento.`, { tone: 'success' })
+      },
+
+      registerPayment(paymentId, { amount, method, date, ref }) {
+        const p = dataRef.current.payments.find((x) => x.id === paymentId)
+        if (!p || !(amount > 0)) return
+        const deal = dataRef.current.deals.find((x) => x.id === p.dealId)
+        const paidAt = date || new Date().toISOString()
+        const full = amount >= p.amount - 0.009
+        withUndo(
+          full ? `Pago registrado: ${fmtMoney(p.amount, p.currency)} · ${method}` : `Abono parcial registrado: ${fmtMoney(amount, p.currency)}`,
+          (d) => ({
+            ...d,
+            payments: full
+              ? d.payments.map((x) => (x.id === paymentId ? { ...x, paidAt, method, ref } : x))
+              : [
+                  ...d.payments.map((x) => (x.id === paymentId ? { ...x, amount: Math.round((x.amount - amount) * 100) / 100 } : x)),
+                  { ...p, id: newId('p'), amount, label: `Abono · ${p.label}`, paidAt, method, ref },
+                ],
+            contacts: d.contacts.map((k) =>
+              k.id === p.contactId
+                ? { ...k, timeline: [{ id: newId('t'), at: new Date().toISOString(), type: 'pago', text: `${full ? 'Pagó' : 'Abonó'} ${fmtMoney(full ? p.amount : amount, p.currency)} (${p.label} · ${deal?.product}) por ${method}${ref ? `, op. ${ref}` : ''}.`, by: 'andres' }, ...k.timeline] }
+                : k
+            ),
+          }),
+          'success'
+        )
+      },
+
+      isSnoozed: (id) => (data.snoozed?.[id] || '') > new Date().toISOString(),
+      snooze(id, days = 1) {
+        withUndo(days === 1 ? 'Aviso pospuesto hasta mañana' : `Aviso pospuesto ${days} días`, (d) => ({ ...d, snoozed: { ...d.snoozed, [id]: at(days, 0) } }))
       },
 
       addDeal(f) {

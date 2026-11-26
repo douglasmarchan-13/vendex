@@ -156,6 +156,24 @@ const contacts = [
   C('c26', 'Héctor Urdaneta', '', 'VE', 'Machiques', 'Zulia', '+58 414 690 4471', 'V-17220984', 'Facebook', 'andreina', 'frio', [
     [7, 'whatsapp', 'Preguntó precio en bolívares. Dijo que lo pensará.'],
   ]),
+
+  // ---------- Clientes con ventas de meses anteriores (cartera por cobrar) ----------
+  C('c27', 'Fernando Requejo Tafur', 'Molino Requejo E.I.R.L.', 'PE', 'Bellavista', 'San Martín', '+51 942 607 315', '20603318842', 'Referido', 'andres', 'caliente', [
+    [3, 'nota', 'Cuota 2 de 6 vencida. Dijo que deposita al cobrar su arroz en el molino.'],
+    [30, 'pago', 'Pagó cuota 1 de 6 por transferencia.'],
+    [60, 'venta', '¡Compró! Secadora de arroz 30 TN. Financiado: inicial + 6 cuotas.'],
+  ]),
+  C('c28', 'Rosa Mamani Condori', 'Coop. Agraria Quinua Andina', 'BO', 'Salinas de Garci Mendoza', 'Oruro', '+591 724 985 21', '1029384017', 'Feria agrícola', 'rodrigo', 'caliente', [
+    [35, 'venta', '¡Compró! Cosechadora de quinua 350. 50% adelanto, 50% contra entrega.'],
+  ]),
+  C('c29', 'Luis Alberto Rangel', 'Inversiones Arroceras del Guárico C.A.', 'VE', 'Calabozo', 'Guárico', '+58 424 301 7765', 'J-41022963-8', 'WhatsApp', 'andreina', 'tibio', [
+    [5, 'whatsapp', 'Pidió una semana más para pagar el saldo por Zelle.'],
+    [45, 'venta', '¡Compró! Molino de arroz 3 TN/h. Saldo a 30 días.'],
+  ]),
+  C('c30', 'Pablo Jiménez Vela', 'Molino San Pablo', 'PE', 'Nueva Cajamarca', 'San Martín', '+51 942 915 147', '20572110088', 'Visita de campo', 'daniela', 'tibio', [
+    [10, 'llamada', 'No contesta. El saldo de la pulidora y clasificadora sigue pendiente.'],
+    [70, 'venta', '¡Compró! Pulidora + clasificadora. 50% adelanto y saldo a 30 días.'],
+  ]),
 ]
 
 const D = (id, contactId, product, amount, currency, stage, temp, nextDays, nextAction, extra = {}) => ({
@@ -192,6 +210,52 @@ const deals = [
   D('d24', 'c24', 'Tractor agrícola 90 HP', 42000, 'USD', 'nuevo', 'tibio', 2, 'Enviar ficha técnica'),
   D('d25', 'c25', 'Pulidora de arroz MN-25', 6350, 'USD', 'cerrado', 'caliente', 0, 'Postventa', { closedAt: at(monthOffset(12), 15) }),
   D('d26', 'c26', 'Motocultor 15 HP', 394450, 'VES', 'contactado', 'frio', 4, 'Enviar precio actualizado'),
+  D('d27', 'c27', 'Secadora de arroz 30 TN', 117000, 'USD', 'cerrado', 'caliente', 0, 'Cobrar cuota 2 de 6', { closedAt: at(-60, 11) }),
+  D('d28', 'c28', 'Cosechadora de quinua 350', 33000, 'USD', 'cerrado', 'caliente', 0, 'Entrega y cobro del saldo', { closedAt: at(-35, 10) }),
+  D('d29', 'c29', 'Molino de arroz 3 TN/h', 38500, 'USD', 'cerrado', 'tibio', 0, 'Cobrar saldo por Zelle', { closedAt: at(-45, 15) }),
+  D('d30', 'c30', 'Pulidora + clasificadora', 76000, 'PEN', 'cerrado', 'tibio', 0, 'Cobrar saldo', { closedAt: at(-70, 12) }),
+]
+
+// Medios de pago habituales por país
+export const PAY_METHODS = {
+  PE: ['Transferencia', 'Depósito', 'Yape / Plin', 'Efectivo', 'Cheque'],
+  BO: ['Transferencia', 'Depósito', 'QR Simple', 'Efectivo'],
+  VE: ['Zelle', 'Transferencia', 'Pago móvil', 'Efectivo (USD)'],
+}
+
+// Plan de cobro (cuotas) de cada venta cerrada
+const P = (id, dealId, n, of, label, amount, dueDays, paid) => {
+  const d = deals.find((x) => x.id === dealId)
+  return {
+    id, dealId, contactId: d.contactId, currency: d.currency, n, of, label, amount,
+    dueAt: at(dueDays, 9),
+    ...(paid ? { paidAt: at(paid[0], 11), method: paid[1], ref: paid[2] || '' } : {}),
+  }
+}
+
+const payments = [
+  P('p1', 'd5', 1, 1, 'Pago al contado', 6350, monthOffset(3), [monthOffset(3), 'Transferencia', 'OP-558120']),
+  P('p2', 'd25', 1, 1, 'Pago al contado', 6350, monthOffset(12), [monthOffset(12), 'Zelle']),
+  P('p3', 'd6', 1, 2, 'Adelanto 50%', 3000, 0, [0, 'Yape / Plin']),
+  P('p4', 'd6', 2, 2, 'Saldo contra entrega', 3000, 3),
+  P('p5', 'd14', 1, 2, 'Adelanto 50%', 71610, monthOffset(9), [monthOffset(9), 'Depósito', 'BCP 00912']),
+  P('p6', 'd14', 2, 2, 'Saldo 50%', 71610, 0),
+  P('p7', 'd21', 1, 3, 'Cuota 1 de 3', 89334, monthOffset(6), [monthOffset(6), 'Transferencia', 'BNB 77410']),
+  P('p8', 'd21', 2, 3, 'Cuota 2 de 3', 89333, 24),
+  P('p9', 'd21', 3, 3, 'Cuota 3 de 3', 89333, 54),
+  P('p10', 'd27', 0, 6, 'Inicial', 27000, -60, [-60, 'Transferencia', 'OP-401233']),
+  P('p11', 'd27', 1, 6, 'Cuota 1 de 6', 15000, -33, [-30, 'Transferencia', 'OP-433901']),
+  P('p12', 'd27', 2, 6, 'Cuota 2 de 6', 15000, -3),
+  P('p13', 'd27', 3, 6, 'Cuota 3 de 6', 15000, 27),
+  P('p14', 'd27', 4, 6, 'Cuota 4 de 6', 15000, 57),
+  P('p15', 'd27', 5, 6, 'Cuota 5 de 6', 15000, 87),
+  P('p16', 'd27', 6, 6, 'Cuota 6 de 6', 15000, 117),
+  P('p17', 'd28', 1, 2, 'Adelanto 50%', 16500, -35, [-35, 'Transferencia']),
+  P('p18', 'd28', 2, 2, 'Saldo contra entrega', 16500, 2),
+  P('p19', 'd29', 1, 2, 'Adelanto 50%', 19250, -45, [-45, 'Zelle']),
+  P('p20', 'd29', 2, 2, 'Saldo a 30 días', 19250, -12),
+  P('p21', 'd30', 1, 2, 'Adelanto 50%', 38000, -70, [-70, 'Depósito']),
+  P('p22', 'd30', 2, 2, 'Saldo a 30 días', 38000, -38),
 ]
 
 const T = (id, h, m, type, contactId, title, done = false, day = 0) => ({ id, at: at(day, h, m), type, contactId, title, done })
@@ -206,6 +270,7 @@ const tasks = [
   T('t6', 16, 15, 'llamada', 'c12', 'Llamar pasadas las 4 pm'),
   T('t7', 17, 30, 'reunion', 'c22', 'Videollamada con el socio (Calabozo)'),
   T('t8', 10, 0, 'llamada', 'c13', 'Seguimiento a cotización de pre-limpia', false, -2),
+  T('t9', 12, 0, 'llamada', 'c14', 'Cobrar saldo 50% del molino (vence hoy)'),
 ]
 
 const alerts = [
@@ -229,6 +294,8 @@ export function seed() {
   return {
     contacts,
     deals,
+    payments,
+    snoozed: {},
     tasks,
     alerts,
     strategy,

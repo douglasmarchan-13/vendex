@@ -24,6 +24,9 @@ React 19 + Vite, Tailwind CSS v4, Lucide Icons, fuente Inter. El estado vive en 
 | `src/views/Today.jsx` | Hoy · Mi Copiloto: KPIs, alertas inteligentes, agenda con checkboxes |
 | `src/views/Pipeline.jsx` | Embudo Kanban con arrastrar y soltar, mover por botones y “Por ahora no” |
 | `src/views/Clients.jsx` | Directorio con búsqueda, filtros, acciones rápidas e importación desde Excel (simulada) |
+| `src/views/Collections.jsx` | Cobranza: cuotas vencidas, de hoy y próximas, antigüedad de deuda, por país |
+| `src/components/CobranzaModals.jsx` | Registrar pago (total, parcial o en otra moneda) y crear plan de cobro (contado, 50/50, financiado) |
+| `src/lib/cobranza.js` | Estado de cada cuota y cálculo de planes de pago |
 | `src/views/Planning.jsx` | Simulador de meta, meta por país y tablero de estrategia editable |
 | `src/components/ClientDrawer.jsx` | Ficha del cliente + línea de tiempo (reemplaza las columnas STATUS 1, 2, 3 del Excel) |
 | `src/components/Modals.jsx` | Nuevo trato, WhatsApp con plantillas, registrar llamada, pago mixto USD/moneda local, importar Excel, tipo de cambio |

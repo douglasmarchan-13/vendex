@@ -5,6 +5,8 @@ import {
 } from 'lucide-react'
 import { useApp } from '../store'
 import { CHANNELS, COUNTRIES, PRODUCTS, STAGES } from '../data/mock'
+import { at, diffDays, fmtDate } from '../lib/dates'
+import { PayModal, PlanModal } from './CobranzaModals'
 import { CURRENCIES, convert, fmtMoney } from '../lib/money'
 import { Avatar, Button, Field, Flag, Modal, TEMPS, cx, inputCls } from './ui'
 import { mainDeal } from '../views/Clients'
@@ -12,7 +14,7 @@ import { mainDeal } from '../views/Clients'
 export default function Modals() {
   const { modal, closeModal } = useApp()
   if (!modal) return null
-  const P = { deal: DealModal, wa: WhatsAppModal, call: CallModal, split: SplitModal, import: ImportModal, rates: RatesModal }[modal.type]
+  const P = { deal: DealModal, wa: WhatsAppModal, call: CallModal, split: SplitModal, import: ImportModal, rates: RatesModal, pay: PayModal, plan: PlanModal }[modal.type]
   return P ? <P {...modal} onClose={closeModal} /> : null
 }
 
@@ -162,25 +164,35 @@ function DealModal({ onClose, contactId }) {
 }
 
 /* ================= WhatsApp ================= */
-function WhatsAppModal({ onClose, contactId, alertId, template = 'seguimiento' }) {
-  const { contactById, data, money, original, logActivity, toast } = useApp()
+function WhatsAppModal({ onClose, contactId, alertId, paymentId, template = 'seguimiento' }) {
+  const { contactById, data, money, original, logActivity, toast, setData } = useApp()
   const resolve = useResolveAlert()
   const c = contactById[contactId]
-  const d = mainDeal(data.deals, c.id)
+  const pay = paymentId && data.payments.find((p) => p.id === paymentId)
+  const d = pay ? data.deals.find((x) => x.id === pay.dealId) : mainDeal(data.deals, c.id)
   const first = c.name.split(' ')[0]
   const price = d ? (c.country === 'VE' ? original(d.amount, d.currency) : money(d.amount, d.currency)) : ''
-  const T = {
+  const owed = pay ? fmtMoney(pay.amount, pay.currency) : ''
+  const late = pay ? -diffDays(pay.dueAt) : 0
+  const when = !pay ? '' : late > 0 ? `venció el ${fmtDate(pay.dueAt)}` : late === 0 ? 'vence hoy' : `vence el ${fmtDate(pay.dueAt)}`
+  const T = pay ? {
+    cobro: { label: 'Recordatorio amable', text: `Hola ${first}, buen día. Le escribe Andrés de Vendex. Le recordamos que el pago de ${pay.label.toLowerCase()} de su ${d?.product} por ${owed} ${when}. ¿Nos confirma la fecha de pago? Cualquier duda, con gusto le ayudo.` },
+    firme: { label: 'Cobro vencido', text: `Hola ${first}, le escribe Andrés de Vendex. Su pago de ${owed} (${pay.label.toLowerCase()}, ${d?.product}) ${when} y figura pendiente. Para mantener vigente su garantía y servicio técnico, le pedimos regularizarlo esta semana. ¿Qué día podemos contar con el pago?` },
+    acuerdo: { label: 'Proponer acuerdo', text: `Hola ${first}, entendemos que la campaña puede retrasar los ingresos. Para su pago de ${owed} podemos dividirlo en dos abonos. ¿Le parece bien la mitad esta semana y el resto en 15 días?` },
+  } : {
     seguimiento: { label: 'Seguimiento', text: `Hola ${first}, buen día. Le escribe Andrés de Vendex. ¿Pudo revisar la cotización de ${d?.product || 'la máquina'}${price ? ` (${price})` : ''}? Quedo atento a sus dudas para avanzar.` },
     video: { label: 'Enviar video', text: `Hola ${first}, le escribe Andrés. Intenté llamarlo, le dejo un video de 40 segundos de ${d?.product || 'la máquina'} trabajando en planta. ¿Le llamo mañana a las 9 o prefiere a las 4?` },
     separar: { label: 'Separar equipo', text: `Hola ${first}, ¡felicitaciones por la aprobación del crédito! Puede separar ${d?.product || 'su equipo'} con solo 30% de adelanto y asegurar la entrega antes de la campaña. ¿Le preparo la proforma?` },
     promo: { label: 'Promoción', text: `Hola ${first}, este mes tenemos instalación y capacitación gratis en secadoras y 10% de descuento al contado en molinos compactos. ¿Le interesa que le envíe el detalle?` },
   }
-  const [k, setK] = useState(template)
-  const [text, setText] = useState(T[template]?.text || T.seguimiento.text)
+  const start = pay ? (template === 'firme' || late > 0 ? 'firme' : 'cobro') : template
+  const [k, setK] = useState(start)
+  const [text, setText] = useState(T[start]?.text || Object.values(T)[0].text)
 
   const send = () => {
-    logActivity(c.id, 'whatsapp', `WhatsApp enviado: “${text.length > 110 ? text.slice(0, 110) + '…' : text}”`)
+    logActivity(c.id, 'whatsapp', `WhatsApp ${pay ? 'de cobranza ' : ''}enviado: “${text.length > 110 ? text.slice(0, 110) + '…' : text}”`)
     resolve(alertId)
+    if (pay) setData((x) => ({ ...x, snoozed: { ...x.snoozed, [`cobro-${pay.id}`]: at(1, 0) } }))
     toast(`Mensaje registrado para ${first} (envío simulado)`, { tone: 'success' })
     onClose()
   }

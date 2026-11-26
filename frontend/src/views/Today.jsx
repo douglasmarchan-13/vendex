@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import {
   Sparkles, Flame, TriangleAlert, PhoneMissed, CalendarClock, Landmark, ArrowLeftRight, Phone, MessageCircle,
-  Clock, Video, MapPin, Plus, Target, Wallet, ListChecks, CalendarX2, ChevronRight, Check,
+  Clock, Video, MapPin, Plus, Target, Wallet, ListChecks, CalendarX2, ChevronRight, Check, Banknote, HandCoins, CalendarClock as CalClock,
 } from 'lucide-react'
 import { useApp } from '../store'
+import { useCobros } from './Collections'
 import { COUNTRIES, GOAL_SHARE } from '../data/mock'
 import { Avatar, Button, Card, Empty, Field, Flag, Progress, cx, inputCls } from '../components/ui'
 import { diffDays, fmtTime, startOfMonth, todayLong, at } from '../lib/dates'
@@ -15,6 +16,9 @@ const ALERT_UI = {
   promise: { icon: CalendarClock, cls: 'bg-indigo-50 text-indigo-600', tag: 'Lo prometiste' },
   credit: { icon: Landmark, cls: 'bg-emerald-50 text-emerald-600', tag: 'Momento de cierre' },
   fx: { icon: ArrowLeftRight, cls: 'bg-sky-50 text-sky-600', tag: 'Multimoneda' },
+  cobro: { icon: HandCoins, cls: 'bg-rose-100 text-rose-700', tag: 'Cobro vencido' },
+  cobroHoy: { icon: Banknote, cls: 'bg-amber-100 text-amber-700', tag: 'Toca cobrar' },
+  cobroPronto: { icon: CalClock, cls: 'bg-indigo-50 text-indigo-600', tag: 'Cobro próximo' },
 }
 
 export const TASK_ICONS = { llamada: Phone, whatsapp: MessageCircle, reunion: Video, visita: MapPin }
@@ -45,7 +49,28 @@ export default function Today() {
     .sort((a, b) => (a.at < b.at ? -1 : 1))
   const todays = tasks.filter((t) => diffDays(t.at) === 0)
   const doneCount = todays.filter((t) => t.done).length
-  const alerts = data.alerts.filter((a) => inCountry(contactById[a.contactId]?.country))
+  // Avisos de cobranza: vencidos, de hoy y de los próximos 2 días (se generan solos desde el plan de cobro)
+  const cob = useCobros()
+  const dealById = Object.fromEntries(data.deals.map((d) => [d.id, d]))
+  const cobroAlerts = [...cob.overdue, ...cob.today, ...cob.week.filter((p) => diffDays(p.dueAt) <= 2)]
+    .filter((p) => !app.isSnoozed(`cobro-${p.id}`))
+    .sort((a, b) => (a.dueAt < b.dueAt ? -1 : 1))
+    .map((p) => {
+      const k = contactById[p.contactId]
+      const dd = diffDays(p.dueAt)
+      const first = k.company || k.name
+      return {
+        id: `cobro-${p.id}`,
+        derived: true,
+        paymentId: p.id,
+        contactId: p.contactId,
+        kind: dd < 0 ? 'cobro' : dd === 0 ? 'cobroHoy' : 'cobroPronto',
+        title: dd < 0 ? `${first} lleva ${-dd} día${dd === -1 ? '' : 's'} de atraso en su pago` : dd === 0 ? `Hoy toca cobrar a ${first}` : `En ${dd} día${dd === 1 ? '' : 's'} vence el pago de ${first}`,
+        body: `${p.label} · ${dealById[p.dealId]?.product} · ${money(p.amount, p.currency)}`,
+        actions: ['pay', 'remind', 'snooze'],
+      }
+    })
+  const alerts = [...cobroAlerts, ...data.alerts.filter((a) => inCountry(contactById[a.contactId]?.country))]
 
   return (
     <div className="space-y-6">
@@ -104,6 +129,24 @@ export default function Today() {
         />
       </section>
 
+      {/* Resumen de cobranza */}
+      {cob.pending.length > 0 && (
+        <a href="#cobranza" className="block">
+          <Card className={cx('flex flex-col gap-3 p-4 transition hover:shadow-md sm:flex-row sm:items-center sm:p-5', cob.overdue.length ? 'border-rose-200 bg-rose-50/40' : '')}>
+            <span className={cx('grid h-11 w-11 shrink-0 place-items-center rounded-xl', cob.overdue.length ? 'bg-rose-600 text-white' : 'bg-emerald-100 text-emerald-700')}><HandCoins size={20} /></span>
+            <div className="min-w-0 flex-1">
+              <p className="font-semibold text-slate-900">Cobranza</p>
+              <p className="text-sm text-slate-600">
+                {cob.overdue.length > 0 && <b className="font-semibold text-rose-700">{fromUSD(cob.sum(cob.overdue))} vencido ({cob.overdue.length}) · </b>}
+                {cob.today.length > 0 && <b className="font-semibold text-amber-700">{fromUSD(cob.sum(cob.today))} vence hoy · </b>}
+                {fromUSD(cob.sum(cob.week))} en los próximos 7 días
+              </p>
+            </div>
+            <span className="inline-flex items-center gap-1 text-sm font-medium text-indigo-600">Gestionar cobros <ChevronRight size={16} /></span>
+          </Card>
+        </a>
+      )}
+
       <div className="grid gap-6 lg:grid-cols-5">
         {/* Alertas del Copiloto */}
         <Card className="overflow-hidden lg:col-span-3">
@@ -147,15 +190,17 @@ function Kpi({ icon: I, label, value, sub, href, tone, className }) {
 }
 
 function AlertRow({ a }) {
-  const { contactById, openModal, dismissAlert, openContact } = useApp()
+  const { contactById, openModal, dismissAlert, openContact, snooze } = useApp()
   const c = contactById[a.contactId]
   const ui = ALERT_UI[a.kind]
   const I = ui.icon
   const act = {
+    pay: <Button key="pay" size="sm" variant="success" onClick={() => openModal('pay', { paymentId: a.paymentId })}><Banknote size={14} /> Registrar pago</Button>,
+    remind: <Button key="rem" size="sm" variant="wa" onClick={() => openModal('wa', { contactId: c.id, paymentId: a.paymentId, template: 'cobro' })}><MessageCircle size={14} /> Recordar por WhatsApp</Button>,
     call: <Button key="call" size="sm" variant="primary" onClick={() => openModal('call', { contactId: c.id, alertId: a.id })}><Phone size={14} /> Llamar ahora</Button>,
     whatsapp: <Button key="wa" size="sm" variant="wa" onClick={() => openModal('wa', { contactId: c.id, alertId: a.id, template: a.kind === 'noanswer' ? 'video' : a.kind === 'credit' ? 'separar' : 'seguimiento' })}><MessageCircle size={14} /> Enviar WhatsApp</Button>,
     split: <Button key="split" size="sm" variant="primary" onClick={() => openModal('split', { contactId: c.id, alertId: a.id })}><ArrowLeftRight size={14} /> Calcular pago mixto</Button>,
-    snooze: <Button key="sn" size="sm" variant="ghost" onClick={() => dismissAlert(a.id)}><Clock size={14} /> Posponer</Button>,
+    snooze: <Button key="sn" size="sm" variant="ghost" onClick={() => (a.derived ? snooze(a.id) : dismissAlert(a.id))}><Clock size={14} /> Posponer</Button>,
   }
   return (
     <li className="anim-fade flex gap-3 px-5 py-4">

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Sparkles, SquareKanban, Users, Target, Plus, ChevronDown, Check, Coins, RotateCcw, Globe } from 'lucide-react'
+import { Sparkles, SquareKanban, Users, Target, Plus, ChevronDown, Check, Coins, RotateCcw, Globe, HandCoins, Bell, BellRing } from 'lucide-react'
+import { useCobros } from '../views/Collections'
+import { dueText } from '../lib/cobranza'
 import { useApp } from '../store'
 import { COUNTRIES, SELLERS } from '../data/mock'
 import { CURRENCIES } from '../lib/money'
@@ -9,12 +11,15 @@ export const NAV = [
   { id: 'hoy', label: 'Hoy', long: 'Hoy · Mi Copiloto', icon: Sparkles },
   { id: 'embudo', label: 'Embudo', long: 'Embudo de ventas', icon: SquareKanban },
   { id: 'clientes', label: 'Clientes', long: 'Clientes y prospectos', icon: Users },
-  { id: 'planeacion', label: 'Planeación', long: 'Planeación y estrategia', icon: Target },
+  { id: 'cobranza', label: 'Cobros', long: 'Cobranza', icon: HandCoins },
+  { id: 'planeacion', label: 'Plan', long: 'Planeación y estrategia', icon: Target },
 ]
 
 export function Sidebar({ view }) {
   const { data, reset } = useApp()
   const hot = data.deals.filter((d) => d.temp === 'caliente' && !['cerrado', 'pausa'].includes(d.stage)).length
+  const cob = useCobros()
+  const due = cob.overdue.length + cob.today.length
   return (
     <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-slate-200/80 bg-white lg:flex">
       <div className="flex items-center gap-3 px-5 pb-6 pt-5">
@@ -40,6 +45,7 @@ export function Sidebar({ view }) {
               <I size={18} strokeWidth={on ? 2.4 : 2} />
               <span className="flex-1">{n.long}</span>
               {n.id === 'embudo' && hot > 0 && <span className="rounded-full bg-rose-100 px-1.5 text-[11px] font-semibold text-rose-700">{hot}</span>}
+              {n.id === 'cobranza' && due > 0 && <span className="rounded-full bg-rose-600 px-1.5 text-[11px] font-semibold text-white">{due}</span>}
             </a>
           )
         })}
@@ -162,6 +168,7 @@ export function TopBar({ view }) {
         <div className="ml-auto flex items-center gap-2">
           <div className="hidden md:block"><CountrySwitch /></div>
           <CurrencyMenu />
+          <CobroBell />
           <div className="hidden sm:block"><Button variant="primary" onClick={() => openModal('deal')}>
             <Plus size={16} strokeWidth={2.5} /> Nuevo trato
           </Button></div>
@@ -174,29 +181,94 @@ export function TopBar({ view }) {
 
 export function MobileNav({ view }) {
   const { openModal } = useApp()
-  const items = [NAV[0], NAV[1], null, NAV[2], NAV[3]]
+  const cob = useCobros()
+  const due = cob.overdue.length + cob.today.length
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden">
-      <div className="grid h-16 grid-cols-5">
-        {items.map((n, i) =>
-          n ? (
-            <a key={n.id} href={`#${n.id}`} className={cx('flex flex-col items-center justify-center gap-1 text-[11px] font-medium', view === n.id ? 'text-indigo-600' : 'text-slate-500')}>
+    <>
+      <button
+        onClick={() => openModal('deal')}
+        aria-label="Nuevo trato"
+        className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 z-30 grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-blue-900 text-white shadow-lg shadow-indigo-600/30 active:scale-95 sm:hidden"
+      >
+        <Plus size={26} strokeWidth={2.5} />
+      </button>
+      <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden">
+        <div className="grid h-16 grid-cols-5">
+          {NAV.map((n) => (
+            <a key={n.id} href={`#${n.id}`} className={cx('relative flex flex-col items-center justify-center gap-1 text-[11px] font-medium', view === n.id ? 'text-indigo-600' : 'text-slate-500')}>
               <n.icon size={21} strokeWidth={view === n.id ? 2.4 : 2} />
               {n.label}
+              {n.id === 'cobranza' && due > 0 && (
+                <span className="absolute left-1/2 top-1.5 ml-2 grid h-4 min-w-4 place-items-center rounded-full bg-rose-600 px-1 text-[10px] font-bold text-white">{due}</span>
+              )}
             </a>
-          ) : (
-            <div key={i} className="flex items-center justify-center">
-              <button
-                onClick={() => openModal('deal')}
-                aria-label="Nuevo trato"
-                className="-mt-6 grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-blue-900 text-white shadow-lg shadow-indigo-600/30 active:scale-95"
-              >
-                <Plus size={26} strokeWidth={2.5} />
-              </button>
-            </div>
-          )
+          ))}
+        </div>
+      </nav>
+    </>
+  )
+}
+
+/* Campana: avisos de cobros vencidos, de hoy y próximos 2 días */
+export function CobroBell() {
+  const { contactById, data, money, openModal, isSnoozed } = useApp()
+  const cob = useCobros()
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    const h = (e) => ref.current && !ref.current.contains(e.target) && setOpen(false)
+    document.addEventListener('pointerdown', h)
+    return () => document.removeEventListener('pointerdown', h)
+  }, [])
+  const soon = cob.week.filter((p) => new Date(p.dueAt) - new Date() < 3 * 86400000)
+  const items = [...cob.overdue, ...cob.today, ...soon].sort((a, b) => (a.dueAt < b.dueAt ? -1 : 1))
+  const urgent = cob.overdue.length + cob.today.length
+  const fresh = items.filter((p) => !isSnoozed(`cobro-${p.id}`)).length
+  const I = urgent ? BellRing : Bell
+  const product = (p) => data.deals.find((d) => d.id === p.dealId)?.product
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-label={`Avisos de cobranza: ${urgent}`}
+        className="relative grid h-10 w-10 place-items-center rounded-lg bg-white text-slate-600 ring-1 ring-inset ring-slate-200 hover:bg-slate-50"
+      >
+        <I size={18} className={urgent ? 'text-rose-600' : ''} />
+        {urgent > 0 && (
+          <span className={cx('absolute -right-1.5 -top-1.5 grid h-5 min-w-5 place-items-center rounded-full bg-rose-600 px-1 text-[11px] font-bold text-white ring-2 ring-[#F8FAFC]', fresh > 0 && 'animate-pulse')}>{urgent}</span>
         )}
-      </div>
-    </nav>
+      </button>
+      {open && (
+        <div className="anim-up absolute right-0 z-40 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-xl border border-slate-200 bg-white shadow-xl">
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+            <p className="font-semibold text-slate-900">Avisos de cobranza</p>
+            <a href="#cobranza" onClick={() => setOpen(false)} className="text-xs font-medium text-indigo-600">Ver todo</a>
+          </div>
+          {items.length === 0 ? (
+            <p className="px-4 py-6 text-center text-sm text-slate-500">No hay cobros pendientes para los próximos días.</p>
+          ) : (
+            <ul className="max-h-80 divide-y divide-slate-100 overflow-y-auto">
+              {items.map((p) => {
+                const k = contactById[p.contactId]
+                return (
+                  <li key={p.id}>
+                    <button onClick={() => { setOpen(false); openModal('pay', { paymentId: p.id }) }} className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-slate-50">
+                      <span className={cx('mt-1.5 h-2 w-2 shrink-0 rounded-full', p.status === 'vencido' ? 'bg-rose-500' : p.status === 'hoy' ? 'bg-amber-500' : 'bg-indigo-400')} />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1.5 text-sm font-medium text-slate-800"><Flag code={k.country} className="h-2.5 w-[15px]" /> <span className="truncate">{k.name}</span></span>
+                        <span className="block truncate text-xs text-slate-500">{p.label} · {product(p)}</span>
+                        <span className={cx('text-xs font-medium', p.status === 'vencido' ? 'text-rose-600' : p.status === 'hoy' ? 'text-amber-700' : 'text-indigo-600')}>{dueText(p)}</span>
+                      </span>
+                      <span className="whitespace-nowrap text-sm font-semibold tabular-nums text-slate-900">{money(p.amount, p.currency)}</span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
   )
 }

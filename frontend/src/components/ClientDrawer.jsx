@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import {
   X, Phone, MessageCircle, Mail, MapPin, FileText, CircleDollarSign, StickyNote, Eye, Video, IdCard, Megaphone,
-  UserRound, Coins, Plus, Send,
+  UserRound, Coins, Plus, Send, Banknote,
 } from 'lucide-react'
 import { useApp, stageName } from '../store'
 import { COUNTRIES, SELLERS } from '../data/mock'
-import { CURRENCIES } from '../lib/money'
+import { CURRENCIES, fmtMoney } from '../lib/money'
 import { Avatar, Button, Flag, TEMPS, cx } from './ui'
-import { fmtTime, rel } from '../lib/dates'
+import { fmtDate, fmtTime, rel } from '../lib/dates'
+import { PAY_UI, dueText, payStatus } from '../lib/cobranza'
 
 export const TL = {
   llamada: { icon: Phone, cls: 'bg-indigo-100 text-indigo-600', label: 'Llamada' },
@@ -19,6 +20,7 @@ export const TL = {
   nota: { icon: StickyNote, cls: 'bg-slate-100 text-slate-600', label: 'Nota' },
   vista: { icon: Eye, cls: 'bg-rose-100 text-rose-600', label: 'Actividad' },
   correo: { icon: Mail, cls: 'bg-slate-100 text-slate-600', label: 'Correo' },
+  pago: { icon: Banknote, cls: 'bg-emerald-100 text-emerald-700', label: 'Pago' },
 }
 
 export default function ClientDrawer() {
@@ -37,6 +39,10 @@ export default function ClientDrawer() {
 
   if (!c) return null
   const deals = data.deals.filter((d) => d.contactId === c.id)
+  const pays = data.payments.filter((p) => p.contactId === c.id).sort((a, b) => (a.dueAt < b.dueAt ? -1 : 1))
+  const owedCur = pays[0]?.currency
+  const owed = pays.filter((p) => !p.paidAt).reduce((s, p) => s + p.amount, 0)
+  const paidSum = pays.filter((p) => p.paidAt).reduce((s, p) => s + p.amount, 0)
   const country = COUNTRIES[c.country]
   const save = (e) => {
     e.preventDefault()
@@ -115,6 +121,38 @@ export default function ClientDrawer() {
             ))}
             {deals.length === 0 && <li className="text-sm text-slate-500">Sin tratos todavía.</li>}
           </ul>
+
+          {pays.length > 0 && (
+            <>
+              <h3 className="mt-6 text-xs font-semibold text-slate-400">Estado de cuenta</h3>
+              <div className="mt-2 rounded-xl border border-slate-200">
+                <div className="grid grid-cols-2 gap-px overflow-hidden rounded-t-xl bg-slate-100">
+                  <div className="bg-white p-3"><p className="text-xs text-slate-500">Pagado</p><p className="font-semibold tabular-nums text-emerald-600">{fmtMoney(paidSum, owedCur)}</p></div>
+                  <div className="bg-white p-3"><p className="text-xs text-slate-500">Por cobrar</p><p className={cx('font-semibold tabular-nums', owed ? 'text-slate-900' : 'text-slate-400')}>{fmtMoney(owed, owedCur)}</p></div>
+                </div>
+                <ul className="divide-y divide-slate-100 border-t border-slate-100">
+                  {pays.map((p) => {
+                    const st = payStatus(p)
+                    return (
+                      <li key={p.id} className="flex items-center gap-3 px-3 py-2.5 text-sm">
+                        <span className={cx('h-2 w-2 shrink-0 rounded-full', PAY_UI[st].dot)} />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-slate-700">{p.label}</p>
+                          <p className={cx('text-xs', st === 'vencido' ? 'text-rose-600' : 'text-slate-500')}>{p.paidAt ? `Pagado ${fmtDate(p.paidAt)} · ${p.method}` : `${dueText(p)} · ${fmtDate(p.dueAt)}`}</p>
+                        </div>
+                        <span className="whitespace-nowrap font-medium tabular-nums text-slate-800">{fmtMoney(p.amount, p.currency)}</span>
+                        {!p.paidAt && (
+                          <Button size="icon" variant="secondary" className="!h-8 !w-8 text-emerald-600" title="Registrar pago" aria-label="Registrar pago" onClick={() => openModal('pay', { paymentId: p.id })}>
+                            <Banknote size={15} />
+                          </Button>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
+            </>
+          )}
 
           <h3 className="mt-6 text-xs font-semibold text-slate-400">Historial de seguimiento</h3>
           <form onSubmit={save} className="mt-2 rounded-xl border border-slate-200 p-2 focus-within:border-indigo-300 focus-within:ring-4 focus-within:ring-indigo-50">

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { AppProvider } from './store'
+import { useEffect, useRef, useState } from 'react'
+import { AppProvider, useApp } from './store'
 import { MobileNav, NAV, Sidebar, TopBar } from './components/Shell'
 import { Toasts } from './components/ui'
 import ClientDrawer from './components/ClientDrawer'
@@ -8,8 +8,32 @@ import Today from './views/Today'
 import Pipeline from './views/Pipeline'
 import Clients from './views/Clients'
 import Planning from './views/Planning'
+import Collections, { useCobros } from './views/Collections'
 
-const VIEWS = { hoy: Today, embudo: Pipeline, clientes: Clients, planeacion: Planning }
+const VIEWS = { hoy: Today, embudo: Pipeline, clientes: Clients, cobranza: Collections, planeacion: Planning }
+
+/** Al abrir la app, avisa una vez por sesión los cobros vencidos y de hoy */
+function CobroNotifier() {
+  const { toast, fromUSD } = useApp()
+  const c = useCobros()
+  const done = useRef(false)
+  useEffect(() => {
+    if (done.current) return
+    done.current = true
+    try {
+      if (sessionStorage.getItem('vx-cobro-aviso')) return
+      sessionStorage.setItem('vx-cobro-aviso', '1')
+    } catch {
+      /* sin sessionStorage: igual avisamos */
+    }
+    if (!c.overdue.length && !c.today.length) return
+    const parts = []
+    if (c.overdue.length) parts.push(`${c.overdue.length} cobro${c.overdue.length > 1 ? 's' : ''} vencido${c.overdue.length > 1 ? 's' : ''} (${fromUSD(c.sum(c.overdue), { compact: true })})`)
+    if (c.today.length) parts.push(`${c.today.length} vence${c.today.length > 1 ? 'n' : ''} hoy`)
+    setTimeout(() => toast(`Cobranza: tienes ${parts.join(' y ')}`), 600)
+  }, [c, toast, fromUSD])
+  return null
+}
 const current = () => {
   const h = window.location.hash.slice(1)
   return VIEWS[h] ? h : 'hoy'
@@ -44,6 +68,7 @@ export default function App() {
         <ClientDrawer />
         <Modals />
         <Toasts />
+        <CobroNotifier />
       </div>
     </AppProvider>
   )

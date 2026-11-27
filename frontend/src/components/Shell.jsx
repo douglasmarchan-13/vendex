@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { Sparkles, SquareKanban, Users, Target, Plus, ChevronDown, Check, Coins, RotateCcw, Globe, HandCoins, Bell, BellRing } from 'lucide-react'
+import { Link } from 'react-router'
+import { Sparkles, SquareKanban, Users, Target, Plus, ChevronDown, Check, Coins, RotateCcw, Globe, HandCoins, Bell, BellRing, UsersRound, LogOut } from 'lucide-react'
 import { useCobros } from '../views/Collections'
 import { dueText } from '../lib/cobranza'
 import { useApp } from '../store'
-import { COUNTRIES, SELLERS } from '../data/mock'
+import { useAuth } from '../auth/AuthContext'
+import { ROLE_NAMES } from '../lib/session'
+import { COUNTRIES } from '../data/mock'
 import { CURRENCIES } from '../lib/money'
 import { Avatar, Button, Flag, Logo, cx } from './ui'
 
@@ -13,10 +16,15 @@ export const NAV = [
   { id: 'clientes', label: 'Clientes', long: 'Clientes y prospectos', icon: Users },
   { id: 'cobranza', label: 'Cobros', long: 'Cobranza', icon: HandCoins },
   { id: 'planeacion', label: 'Plan', long: 'Planeación y estrategia', icon: Target },
+  { id: 'equipo', label: 'Equipo', long: 'Equipo y accesos', icon: UsersRound, managerOnly: true },
 ]
 
+/** Secciones visibles para el rol (Equipo es solo del gerente) */
+export const navFor = (role) => NAV.filter((n) => !n.managerOnly || role === 'gerente')
+
 export function Sidebar({ view }) {
-  const { data, reset } = useApp()
+  const { data, reset, sellers, canManage, sellerFilter, setSellerFilter } = useApp()
+  const { user, logout } = useAuth()
   const hot = data.deals.filter((d) => d.temp === 'caliente' && !['cerrado', 'pausa'].includes(d.stage)).length
   const cob = useCobros()
   const due = cob.overdue.length + cob.today.length
@@ -30,13 +38,13 @@ export function Sidebar({ view }) {
         </div>
       </div>
       <nav className="flex flex-col gap-1 px-3">
-        {NAV.map((n) => {
+        {navFor(user?.role).map((n) => {
           const I = n.icon
           const on = view === n.id
           return (
-            <a
+            <Link
               key={n.id}
-              href={`#${n.id}`}
+              to={`/${n.id}`}
               className={cx(
                 'flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium transition',
                 on ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
@@ -46,35 +54,53 @@ export function Sidebar({ view }) {
               <span className="flex-1">{n.long}</span>
               {n.id === 'embudo' && hot > 0 && <span className="rounded-full bg-rose-100 px-1.5 text-[11px] font-semibold text-rose-700">{hot}</span>}
               {n.id === 'cobranza' && due > 0 && <span className="rounded-full bg-rose-600 px-1.5 text-[11px] font-semibold text-white">{due}</span>}
-            </a>
+            </Link>
           )
         })}
       </nav>
 
-      <div className="mt-8 px-5">
-        <p className="mb-2 text-xs font-medium text-slate-400">Equipo comercial</p>
-        <ul className="space-y-2">
-          {Object.values(SELLERS).map((s) => (
-            <li key={s.id} className="flex items-center gap-2.5 text-sm text-slate-600">
-              <Avatar name={s.name} size="sm" />
-              <span className="flex-1 truncate">{s.short}{s.id === 'andres' && <span className="text-slate-400"> (tú)</span>}</span>
-              <Flag code={s.country} />
-            </li>
-          ))}
-        </ul>
-      </div>
+      {/* Gerente: su equipo; un clic filtra todo el tablero por ese vendedor */}
+      {canManage && (
+        <div className="mt-8 px-3">
+          <p className="mb-2 px-2 text-xs font-medium text-slate-400">Equipo comercial</p>
+          <ul className="space-y-0.5">
+            {Object.values(sellers).filter((s) => s.active).map((s) => {
+              const on = sellerFilter === s.id
+              return (
+                <li key={s.id}>
+                  <button
+                    onClick={() => setSellerFilter(on ? 'ALL' : s.id)}
+                    title={on ? 'Ver todo el equipo' : `Ver solo a ${s.name}`}
+                    className={cx('flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-sm transition', on ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50')}
+                  >
+                    <Avatar name={s.name} size="sm" />
+                    <span className="flex-1 truncate">{s.short}{s.id === user?.sellerId && <span className="text-slate-400"> (tú)</span>}</span>
+                    <Flag code={s.country} />
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      )}
 
       <div className="mt-auto border-t border-slate-100 p-4">
         <div className="flex items-center gap-3">
-          <Avatar name="Andrés Ramírez" />
+          <Avatar name={user?.name || '?'} />
           <div className="min-w-0 flex-1 leading-tight">
-            <p className="truncate text-sm font-semibold text-slate-800">Andrés Ramírez</p>
-            <p className="text-xs text-slate-500">Jefe comercial · Perú</p>
+            <p className="truncate text-sm font-semibold text-slate-800">{user?.name}</p>
+            <p className="truncate text-xs text-slate-500">{ROLE_NAMES[user?.role]}{user?.companyName ? ` · ${user.companyName}` : ''}</p>
           </div>
+          <button onClick={logout} title="Cerrar sesión" aria-label="Cerrar sesión" className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700">
+            <LogOut size={16} />
+          </button>
         </div>
-        <button onClick={reset} className="mt-3 inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-600">
-          <RotateCcw size={12} /> Restablecer datos de demo
-        </button>
+        {/* Recarga la semilla de demostración: solo el gerente de la empresa demo (lo decide el backend) y solo en desarrollo */}
+        {import.meta.env.DEV && user?.canResetDemo && (
+          <button onClick={reset} className="mt-3 inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-600">
+            <RotateCcw size={12} /> Restablecer demo
+          </button>
+        )}
       </div>
     </aside>
   )
@@ -85,19 +111,19 @@ export function CountrySwitch({ compact }) {
   const count = (c) => data.contacts.filter((k) => c === 'ALL' || k.country === c).length
   const opts = ['ALL', 'PE', 'BO', 'VE']
   return (
-    <div className={cx('flex items-center gap-1 rounded-xl bg-slate-100 p-1', compact && 'w-full')}>
+    <div className={cx('flex items-center gap-1 rounded-xl bg-slate-100 p-1', compact && 'w-full min-w-0')}>
       {opts.map((c) => (
         <button
           key={c}
           onClick={() => setCountry(c)}
           className={cx(
             'inline-flex h-8 items-center justify-center rounded-lg font-medium transition',
-            compact ? 'flex-auto gap-1 px-1.5 text-[12px]' : 'gap-1.5 px-2.5 text-[13px]',
+            compact ? 'min-w-0 flex-auto gap-1 px-1 text-[12px]' : 'gap-1.5 px-2.5 text-[13px]',
             country === c ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
           )}
         >
-          {c === 'ALL' ? <Globe size={14} /> : <Flag code={c} />}
-          <span>{c === 'ALL' ? 'Todos' : COUNTRIES[c].name}</span>
+          {c === 'ALL' ? <Globe size={14} className="shrink-0" /> : <Flag code={c} />}
+          <span className={cx(compact && 'truncate')}>{c === 'ALL' ? 'Todos' : COUNTRIES[c].name}</span>
           {!compact && <span className="text-[11px] text-slate-400">{count(c)}</span>}
         </button>
       ))}
@@ -106,7 +132,7 @@ export function CountrySwitch({ compact }) {
 }
 
 export function CurrencyMenu() {
-  const { currency, setCurrency, data, openModal } = useApp()
+  const { currency, setCurrency, data, openModal, canManage } = useApp()
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
   useEffect(() => {
@@ -143,44 +169,73 @@ export function CurrencyMenu() {
               {currency === k.code && <Check size={16} className="text-indigo-600" />}
             </button>
           ))}
-          <div className="mt-1 border-t border-slate-100 pt-1">
+          {canManage && <div className="mt-1 border-t border-slate-100 pt-1">
             <button onClick={() => { setOpen(false); openModal('rates') }} className="w-full rounded-lg px-2.5 py-2 text-left text-sm font-medium text-indigo-600 hover:bg-indigo-50">
               Editar tipo de cambio del día
             </button>
-          </div>
+          </div>}
         </div>
       )}
     </div>
   )
 }
 
+/** Gerente: "Todos los vendedores" o uno solo (recarga los datos con ?vendedor_id=) */
+export function SellerSwitch({ className }) {
+  const { sellers, canManage, sellerFilter, setSellerFilter } = useApp()
+  if (!canManage) return null
+  return (
+    <select
+      value={sellerFilter}
+      onChange={(e) => setSellerFilter(e.target.value)}
+      aria-label="Vendedor"
+      className={cx('h-10 rounded-lg bg-white px-3 text-sm font-medium text-slate-700 ring-1 ring-inset ring-slate-200 hover:bg-slate-50', sellerFilter !== 'ALL' && 'bg-indigo-50 text-indigo-700 ring-indigo-200', className)}
+    >
+      <option value="ALL">Todos los vendedores</option>
+      {Object.values(sellers).filter((s) => s.active).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+    </select>
+  )
+}
+
 export function TopBar({ view }) {
   const { openModal } = useApp()
+  const { logout } = useAuth()
   const nav = NAV.find((n) => n.id === view)
   return (
     <header className="sticky top-0 z-20 border-b border-slate-200/70 bg-[#F8FAFC]/85 backdrop-blur-md">
       <div className="flex h-16 items-center gap-3 px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center gap-2.5 lg:hidden">
+        <div className="flex min-w-0 items-center gap-2.5 lg:hidden">
           <Logo size={30} />
-          <span className="text-base font-bold tracking-tight text-slate-900">Vendex</span>
+          {/* En teléfonos muy angostos queda solo el logo para que entren los botones */}
+          <span className="hidden text-base font-bold tracking-tight text-slate-900 min-[360px]:inline">Vendex</span>
         </div>
-        <h1 className="hidden text-[15px] font-semibold text-slate-800 lg:block">{nav?.long}</h1>
-        <div className="ml-auto flex items-center gap-2">
-          <div className="hidden md:block"><CountrySwitch /></div>
+        <h1 className="hidden truncate text-[15px] font-semibold text-slate-800 lg:block">{nav?.long}</h1>
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {/* Filtros en línea solo con ancho de sobra (xl); debajo van en la segunda fila */}
+          <SellerSwitch className="hidden xl:block" />
+          <div className="hidden xl:block"><CountrySwitch /></div>
           <CurrencyMenu />
           <CobroBell />
-          <div className="hidden sm:block"><Button variant="primary" onClick={() => openModal('deal')}>
+          <button onClick={logout} aria-label="Cerrar sesión" title="Cerrar sesión" className="grid h-10 w-10 place-items-center rounded-lg bg-white text-slate-600 ring-1 ring-inset ring-slate-200 hover:bg-slate-50 lg:hidden">
+            <LogOut size={18} />
+          </button>
+          <div className="hidden whitespace-nowrap sm:block"><Button variant="primary" onClick={() => openModal('deal')}>
             <Plus size={16} strokeWidth={2.5} /> Nuevo trato
           </Button></div>
         </div>
       </div>
-      <div className="px-4 pb-3 md:hidden"><CountrySwitch compact /></div>
+      <div className="flex flex-col gap-2 px-4 pb-3 sm:flex-row sm:items-center sm:px-6 lg:px-8 xl:hidden">
+        <SellerSwitch className="w-full sm:w-56 sm:shrink-0" />
+        <div className="min-w-0 flex-1"><CountrySwitch compact /></div>
+      </div>
     </header>
   )
 }
 
 export function MobileNav({ view }) {
   const { openModal } = useApp()
+  const { user } = useAuth()
+  const items = navFor(user?.role)
   const cob = useCobros()
   const due = cob.overdue.length + cob.today.length
   return (
@@ -193,15 +248,15 @@ export function MobileNav({ view }) {
         <Plus size={26} strokeWidth={2.5} />
       </button>
       <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden">
-        <div className="grid h-16 grid-cols-5">
-          {NAV.map((n) => (
-            <a key={n.id} href={`#${n.id}`} className={cx('relative flex flex-col items-center justify-center gap-1 text-[11px] font-medium', view === n.id ? 'text-indigo-600' : 'text-slate-500')}>
+        <div className="grid h-16" style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}>
+          {items.map((n) => (
+            <Link key={n.id} to={`/${n.id}`} className={cx('relative flex flex-col items-center justify-center gap-1 text-[11px] font-medium', view === n.id ? 'text-indigo-600' : 'text-slate-500')}>
               <n.icon size={21} strokeWidth={view === n.id ? 2.4 : 2} />
               {n.label}
               {n.id === 'cobranza' && due > 0 && (
                 <span className="absolute left-1/2 top-1.5 ml-2 grid h-4 min-w-4 place-items-center rounded-full bg-rose-600 px-1 text-[10px] font-bold text-white">{due}</span>
               )}
-            </a>
+            </Link>
           ))}
         </div>
       </nav>
@@ -243,7 +298,7 @@ export function CobroBell() {
         <div className="anim-up absolute right-0 z-40 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-xl border border-slate-200 bg-white shadow-xl">
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
             <p className="font-semibold text-slate-900">Avisos de cobranza</p>
-            <a href="#cobranza" onClick={() => setOpen(false)} className="text-xs font-medium text-indigo-600">Ver todo</a>
+            <Link to="/cobranza" onClick={() => setOpen(false)} className="text-xs font-medium text-indigo-600">Ver todo</Link>
           </div>
           {items.length === 0 ? (
             <p className="px-4 py-6 text-center text-sm text-slate-500">No hay cobros pendientes para los próximos días.</p>

@@ -182,14 +182,14 @@ export function Row({ p, deal, compact }) {
       <button onClick={() => openContact(k.id)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
         <Avatar name={k.name} />
         <div className="min-w-0">
-          <p className="flex items-center gap-1.5 truncate font-medium text-slate-900">{k.name} <Flag code={k.country} className="h-2.5 w-[15px]" /></p>
+          <p className="flex items-center gap-1.5 font-medium text-slate-900"><span className="min-w-0 truncate">{k.name}</span> <Flag code={k.country} className="h-2.5 w-[15px]" /></p>
           <p className="truncate text-xs text-slate-500">{deal?.product} · {p.label}</p>
           <span className={cx('mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset', ui.cls)}>
             {paid ? `Pagado el ${fmtDate(p.paidAt)} · ${p.method}` : `${dueText(p)} · ${fmtDate(p.dueAt)}`}
           </span>
         </div>
       </button>
-      <div className="flex items-center gap-3 sm:justify-end">
+      <div className="flex flex-wrap items-center gap-3 sm:flex-nowrap sm:justify-end">
         <div className="mr-auto text-left sm:mr-0 sm:text-right">
           <p className={cx('whitespace-nowrap font-bold tabular-nums', paid ? 'text-emerald-600' : p.status === 'vencido' ? 'text-rose-600' : 'text-slate-900')}>{money(p.amount, p.currency)}</p>
           {p.currency !== currency && <p className="whitespace-nowrap text-[11px] tabular-nums text-slate-400">{original(p.amount, p.currency)}</p>}

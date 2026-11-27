@@ -7,11 +7,25 @@
 html {
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+/* Sin scroll horizontal en la página, nunca (los carruseles y tablas tienen su propio scroll) */
+html,
+body {
+  overflow-x: clip;
 }
 body {
   background: #f8fafc;
-  overflow-x: clip;
   font-feature-settings: 'cv11', 'ss01';
+  /* Palabras largas sin espacios (correos, nombres de empresa) se parten en vez de ensanchar la tarjeta */
+  overflow-wrap: break-word;
+}
+/* Responsive: un hijo de grid no puede ser más ancho que su columna. Sin esto, una sola columna
+   implícita (clase "grid" sin "grid-cols-*") crece hasta el contenido más largo y empuja la página
+   más allá del ancho del teléfono. */
+.grid > * {
+  min-width: 0;
 }
 :focus-visible {
   outline: 2px solid #4f46e5;
@@ -43,15 +57,17 @@ body {
   border: 3px solid #4f46e5;
 }
 
-/* Movimiento */
+/* Movimiento
+   fill-mode "backwards" (no "both"): al terminar no queda un transform aplicado, que convertiría
+   al elemento en contenedor de sus hijos position:fixed (modales y overlays quedarían desplazados). */
 @keyframes fade { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
 @keyframes up { from { opacity: 0; transform: translateY(16px) } to { opacity: 1; transform: none } }
 @keyframes slide { from { transform: translateX(100%) } to { transform: none } }
 @keyframes pop { 0% { transform: scale(.92); opacity: .4 } 100% { transform: none; opacity: 1 } }
-.anim-fade { animation: fade .25s ease-out both }
-.anim-up { animation: up .28s cubic-bezier(.2,.8,.2,1) both }
-.anim-slide { animation: slide .3s cubic-bezier(.2,.8,.2,1) both }
-.anim-pop { animation: pop .25s ease-out both }
+.anim-fade { animation: fade .25s ease-out backwards }
+.anim-up { animation: up .28s cubic-bezier(.2,.8,.2,1) backwards }
+.anim-slide { animation: slide .3s cubic-bezier(.2,.8,.2,1) backwards }
+.anim-pop { animation: pop .25s ease-out backwards }
 
 @media (prefers-reduced-motion: reduce) {
   .anim-fade, .anim-up, .anim-slide, .anim-pop { animation: none }

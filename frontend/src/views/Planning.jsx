@@ -12,7 +12,7 @@ const KIND = {
 }
 
 export default function Planning() {
-  const { data, setGoal, setPlan, fromUSD, usd, contactById } = useApp()
+  const { data, setGoal, setPlan, fromUSD, usd, contactById, canManage } = useApp()
   const { plan, goalUSD } = data
   const [adv, setAdv] = useState(false)
 
@@ -55,7 +55,7 @@ export default function Planning() {
               <label htmlFor="goal" className="text-sm text-slate-500">Meta de ventas del mes (equipo)</label>
               <span className="text-3xl font-bold tracking-tight text-slate-900 tabular-nums sm:text-4xl">{fromUSD(goalUSD)}</span>
             </div>
-            <input id="goal" type="range" min={50000} max={500000} step={5000} value={goalUSD} onChange={(e) => setGoal(Number(e.target.value))} className="range mt-4 w-full" style={{ '--p': `${((goalUSD - 50000) / 450000) * 100}%` }} />
+            <input id="goal" type="range" min={50000} max={500000} step={5000} value={goalUSD} disabled={!canManage} title={canManage ? undefined : 'La meta la define el gerente'} onChange={(e) => setGoal(Number(e.target.value))} className="range mt-4 w-full disabled:cursor-not-allowed disabled:opacity-60" style={{ '--p': `${((goalUSD - 50000) / 450000) * 100}%` }} />
             <div className="mt-1 flex justify-between text-xs text-slate-400 tabular-nums"><span>{fromUSD(50000, { compact: true })}</span><span>{fromUSD(500000, { compact: true })}</span></div>
           </div>
 
@@ -68,23 +68,27 @@ export default function Planning() {
           <div className="mt-6 space-y-2">
             {funnel.map((f, i) => (
               <div key={f.label} className="flex items-center gap-3">
-                <div className="h-9 flex-1">
+                <div className="min-w-0 flex-1">
+                  {/* En el teléfono la etiqueta va arriba de la barra: dentro de una barra corta no se leería */}
+                  <p className="mb-1 flex items-center gap-1.5 text-sm font-medium text-slate-700 sm:hidden">
+                    <f.icon size={14} className="shrink-0 text-slate-400" /> <span className="truncate">{f.label}</span>
+                  </p>
                   <div
-                    className={cx('flex h-full items-center gap-2 rounded-lg px-3 text-sm font-medium text-white transition-all duration-500', ['bg-indigo-600', 'bg-indigo-500', 'bg-emerald-500'][i])}
+                    className={cx('flex h-2.5 min-w-0 items-center gap-2 rounded-full text-sm font-medium text-white transition-all duration-500 sm:h-9 sm:rounded-lg sm:px-3', ['bg-indigo-600', 'bg-indigo-500', 'bg-emerald-500'][i])}
                     style={{ width: `${Math.max(28, (f.v / leads) * 100)}%` }}
                   >
-                    <f.icon size={15} className="shrink-0" /> <span className="truncate">{f.label}</span>
+                    <f.icon size={15} className="hidden shrink-0 sm:block" /> <span className="hidden truncate sm:inline">{f.label}</span>
                   </div>
                 </div>
-                <span className="w-12 text-right text-lg font-bold tabular-nums text-slate-900">{f.v}</span>
+                <span className="w-12 shrink-0 text-right text-lg font-bold tabular-nums text-slate-900">{f.v}</span>
               </div>
             ))}
           </div>
 
-          <button onClick={() => setAdv((v) => !v)} className="mt-5 inline-flex items-center gap-1.5 text-sm font-medium text-indigo-600">
-            <SlidersHorizontal size={15} /> {adv ? 'Ocultar supuestos' : 'Ajustar supuestos'} <span className="font-normal text-slate-400">· ticket {fromUSD(plan.ticketUSD, { compact: true })}, cierre {plan.closeRate}%</span>
-          </button>
-          {adv && (
+          {canManage && <button onClick={() => setAdv((v) => !v)} className="mt-5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-left text-sm font-medium text-indigo-600">
+            <SlidersHorizontal size={15} className="shrink-0" /> <span className="whitespace-nowrap">{adv ? 'Ocultar supuestos' : 'Ajustar supuestos'}</span> <span className="font-normal text-slate-400">· ticket {fromUSD(plan.ticketUSD, { compact: true })}, cierre {plan.closeRate}%</span>
+          </button>}
+          {canManage && adv && (
             <div className="anim-fade mt-4 grid gap-4 rounded-xl bg-slate-50 p-4 sm:grid-cols-2">
               <Param label="Ticket promedio" value={fromUSD(plan.ticketUSD)} min={5000} max={150000} step={1000} v={plan.ticketUSD} on={(v) => setPlan({ ticketUSD: v })} />
               <Param label="Cotizaciones que se cierran" value={`${plan.closeRate}%`} min={5} max={60} v={plan.closeRate} on={(v) => setPlan({ closeRate: v })} />
@@ -155,7 +159,7 @@ function Param({ label, value, v, min, max, step = 1, on, hint }) {
 }
 
 function StrategyBoard() {
-  const { data, saveStrategy, removeStrategy, newId } = useApp()
+  const { data, saveStrategy, removeStrategy, newId, canManage } = useApp()
   const [editing, setEditing] = useState(null)
   return (
     <section>
@@ -164,9 +168,11 @@ function StrategyBoard() {
           <h2 className="font-semibold text-slate-900">Tablero de estrategia semanal</h2>
           <p className="text-xs text-slate-500">Lo que todo el equipo debe tener presente esta semana</p>
         </div>
-        <Button size="sm" variant="secondary" onClick={() => { const id = newId('s'); setEditing({ id, kind: 'guion', title: '', body: '', isNew: true }) }}>
-          <Plus size={14} /> Tarjeta
-        </Button>
+        {canManage && (
+          <Button size="sm" variant="secondary" onClick={() => { const id = newId('s'); setEditing({ id, kind: 'guion', title: '', body: '', isNew: true }) }}>
+            <Plus size={14} /> Tarjeta
+          </Button>
+        )}
       </div>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {editing?.isNew && <StrategyCard s={editing} editing onDone={(item) => { if (item) saveStrategy(item); setEditing(null) }} />}
@@ -175,8 +181,8 @@ function StrategyBoard() {
             key={s.id}
             s={editing?.id === s.id ? editing : s}
             editing={editing?.id === s.id}
-            onEdit={() => setEditing(s)}
-            onRemove={() => removeStrategy(s.id)}
+            onEdit={canManage ? () => setEditing(s) : undefined}
+            onRemove={canManage ? () => removeStrategy(s.id) : undefined}
             onDone={(item) => { if (item) saveStrategy(item); setEditing(null) }}
           />
         ))}
@@ -226,8 +232,8 @@ function StrategyCard({ s, editing, onEdit, onRemove, onDone }) {
         <span className="text-xs font-medium text-slate-400">{K.label}</span>
         <div className="ml-auto flex gap-0.5 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100">
           {s.kind === 'guion' && <Button size="icon" variant="ghost" className="!h-8 !w-8" title="Copiar guion" onClick={copy}>{copied ? <Check size={15} className="text-emerald-600" /> : <Copy size={15} />}</Button>}
-          <Button size="icon" variant="ghost" className="!h-8 !w-8" title="Editar" onClick={() => { setDraft(s); onEdit() }}><Pencil size={15} /></Button>
-          <Button size="icon" variant="ghost" className="!h-8 !w-8" title="Eliminar" onClick={onRemove}><Trash2 size={15} /></Button>
+          {onEdit && <Button size="icon" variant="ghost" className="!h-8 !w-8" title="Editar" onClick={() => { setDraft(s); onEdit() }}><Pencil size={15} /></Button>}
+          {onRemove && <Button size="icon" variant="ghost" className="!h-8 !w-8" title="Eliminar" onClick={onRemove}><Trash2 size={15} /></Button>}
         </div>
       </div>
       <h3 className="mt-3 font-semibold text-slate-900">{s.title}</h3>

@@ -1,4 +1,5 @@
 import { useEffect, useId } from 'react'
+import { createPortal } from 'react-dom'
 import { Flame, Snowflake, Thermometer, X, CircleCheck, Undo2, Info } from 'lucide-react'
 import { useApp } from '../store'
 
@@ -135,14 +136,23 @@ export function Modal({ open, onClose, title, subtitle, children, footer, wide }
     window.addEventListener('keydown', k)
     return () => window.removeEventListener('keydown', k)
   }, [open, onClose])
+  // Sin scroll del fondo mientras el modal está abierto
+  useEffect(() => {
+    if (!open) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prev }
+  }, [open])
   if (!open) return null
-  return (
+  // Portal a <body>: el modal siempre se centra en la ventana y queda sobre el header y la barra
+  // inferior, aunque se abra desde dentro de un contenedor con transform o animación.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4">
       <div className="anim-fade absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]" onClick={onClose} />
       <div
         role="dialog"
         aria-modal="true"
-        className={cx('anim-up relative flex max-h-[92dvh] w-full flex-col rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl', wide ? 'sm:max-w-2xl' : 'sm:max-w-lg')}
+        className={cx('anim-up relative flex max-h-[92dvh] w-full min-w-0 flex-col rounded-t-2xl bg-white shadow-2xl sm:max-h-[calc(100dvh-2rem)] sm:rounded-2xl', wide ? 'sm:max-w-2xl' : 'sm:max-w-lg')}
       >
         <div className="flex items-start gap-3 border-b border-slate-100 px-5 py-4">
           <div className="min-w-0 flex-1">
@@ -151,10 +161,11 @@ export function Modal({ open, onClose, title, subtitle, children, footer, wide }
           </div>
           <Button variant="ghost" size="icon" onClick={onClose} aria-label="Cerrar"><X size={18} /></Button>
         </div>
-        <div className="overflow-y-auto px-5 py-4">{children}</div>
-        {footer && <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 px-5 py-3 pb-[max(.75rem,env(safe-area-inset-bottom))]">{footer}</div>}
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">{children}</div>
+        {footer && <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-slate-100 px-5 py-3 pb-[max(.75rem,env(safe-area-inset-bottom))]">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

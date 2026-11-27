@@ -1,9 +1,11 @@
 import { useState } from 'react'
+import { Link } from 'react-router'
 import {
   Sparkles, Flame, TriangleAlert, PhoneMissed, CalendarClock, Landmark, ArrowLeftRight, Phone, MessageCircle,
   Clock, Video, MapPin, Plus, Target, Wallet, ListChecks, CalendarX2, ChevronRight, Check, Banknote, HandCoins, CalendarClock as CalClock,
 } from 'lucide-react'
 import { useApp } from '../store'
+import { useAuth } from '../auth/AuthContext'
 import { useCobros } from './Collections'
 import { COUNTRIES, GOAL_SHARE } from '../data/mock'
 import { Avatar, Button, Card, Empty, Field, Flag, Progress, cx, inputCls } from '../components/ui'
@@ -30,6 +32,9 @@ function greeting() {
 
 export default function Today() {
   const app = useApp()
+  const { user } = useAuth()
+  // Saludo con el primer nombre del usuario de la sesión ("Douglas Marchán" → "Douglas")
+  const firstName = user?.name?.trim().split(/\s+/)[0] || ''
   const { data, contactById, inCountry, usd, fromUSD, money, country } = app
   const visibleDeals = data.deals.filter((d) => inCountry(contactById[d.contactId]?.country))
   const som = startOfMonth().toISOString()
@@ -84,7 +89,7 @@ export default function Today() {
           <circle cx="170" cy="40" r="6" fill="#34D399" />
         </svg>
         <p className="text-sm text-indigo-200">{todayLong().replace(/^./, (ch) => ch.toUpperCase())}</p>
-        <h2 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">¡{greeting()}, Andrés!</h2>
+        <h2 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">¡{greeting()}{firstName && `, ${firstName}`}!</h2>
         <p className="mt-1 max-w-xl text-indigo-100">Aquí tienes tu plan de vuelo para hoy.</p>
         <div className="mt-5 flex flex-wrap gap-2 text-sm">
           <span className="rounded-full bg-white/15 px-3 py-1">{todays.length - doneCount} tareas pendientes</span>
@@ -111,7 +116,7 @@ export default function Today() {
             </span>
           </div>
         </Card>
-        <Kpi icon={Wallet} label="Por cerrar" value={fromUSD(openUSD, { compact: true })} sub={`${open.length} tratos · ${hotCount} calientes`} href="#embudo" />
+        <Kpi icon={Wallet} label="Por cerrar" value={fromUSD(openUSD, { compact: true })} sub={`${open.length} tratos · ${hotCount} calientes`} href="/embudo" />
         <Kpi
           icon={ListChecks}
           label="Tareas de hoy"
@@ -124,14 +129,14 @@ export default function Today() {
           value={late.length}
           tone={late.length ? 'warn' : undefined}
           sub={late.length ? 'Atiéndelos primero' : '¡Al día!'}
-          href="#embudo"
+          href="/embudo"
           className="col-span-2 sm:col-span-1 xl:hidden"
         />
       </section>
 
       {/* Resumen de cobranza */}
       {cob.pending.length > 0 && (
-        <a href="#cobranza" className="block">
+        <Link to="/cobranza" className="block">
           <Card className={cx('flex flex-col gap-3 p-4 transition hover:shadow-md sm:flex-row sm:items-center sm:p-5', cob.overdue.length ? 'border-rose-200 bg-rose-50/40' : '')}>
             <span className={cx('grid h-11 w-11 shrink-0 place-items-center rounded-xl', cob.overdue.length ? 'bg-rose-600 text-white' : 'bg-emerald-100 text-emerald-700')}><HandCoins size={20} /></span>
             <div className="min-w-0 flex-1">
@@ -144,7 +149,7 @@ export default function Today() {
             </div>
             <span className="inline-flex items-center gap-1 text-sm font-medium text-indigo-600">Gestionar cobros <ChevronRight size={16} /></span>
           </Card>
-        </a>
+        </Link>
       )}
 
       <div className="grid gap-6 lg:grid-cols-5">
@@ -175,9 +180,9 @@ export default function Today() {
 }
 
 function Kpi({ icon: I, label, value, sub, href, tone, className }) {
-  const Tag = href ? 'a' : 'div'
+  const Tag = href ? Link : 'div'
   return (
-    <Tag href={href} className={cx('block', className)}>
+    <Tag to={href} className={cx('block', className)}>
       <Card className={cx('h-full p-4 sm:p-5', href && 'transition hover:border-indigo-200 hover:shadow-md')}>
         <div className="flex items-center gap-2 text-sm text-slate-500">
           <I size={16} className={tone === 'warn' ? 'text-amber-500' : 'text-indigo-600'} /> {label}
@@ -208,8 +213,8 @@ function AlertRow({ a }) {
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="text-[11px] font-semibold text-slate-400">{ui.tag}</span>
-          <button onClick={() => openContact(c.id)} className="inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-indigo-600">
-            <Flag code={c.country} className="h-2.5 w-[15px]" /> {c.city}
+          <button onClick={() => openContact(c.id)} className="inline-flex min-w-0 max-w-full items-center gap-1 text-[11px] text-slate-400 hover:text-indigo-600">
+            <Flag code={c.country} className="h-2.5 w-[15px]" /> <span className="min-w-0 truncate">{c.city}</span>
           </button>
         </div>
         <p className="mt-0.5 font-medium leading-snug text-slate-900">{a.title}</p>
@@ -270,9 +275,9 @@ function Agenda({ tasks, late, className }) {
       )}
 
       {late.length > 0 && (
-        <a href="#embudo" className="mx-5 mt-4 flex items-center gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-800 ring-1 ring-inset ring-amber-200">
+        <Link to="/embudo" className="mx-5 mt-4 flex items-center gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-800 ring-1 ring-inset ring-amber-200">
           <CalendarX2 size={16} /> <span className="flex-1">{late.length} seguimiento{late.length > 1 ? 's' : ''} vencido{late.length > 1 ? 's' : ''} en el embudo</span> <ChevronRight size={16} />
-        </a>
+        </Link>
       )}
 
       {tasks.length === 0 ? (
@@ -301,8 +306,8 @@ function Agenda({ tasks, late, className }) {
                     <I size={13} className="text-slate-400" />
                   </div>
                   <p className={cx('text-sm leading-snug', t.done ? 'text-slate-400 line-through' : 'text-slate-800')}>{t.title}</p>
-                  <button onClick={() => openContact(c.id)} className="mt-1 inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-indigo-600">
-                    <Avatar name={c.name} size="xs" /> <span className="truncate">{c.name}</span> <Flag code={c.country} className="h-2.5 w-[15px]" />
+                  <button onClick={() => openContact(c.id)} className="mt-1 inline-flex min-w-0 max-w-full items-center gap-1.5 text-xs text-slate-500 hover:text-indigo-600">
+                    <Avatar name={c.name} size="xs" /> <span className="min-w-0 truncate">{c.name}</span> <Flag code={c.country} className="h-2.5 w-[15px]" />
                   </button>
                 </div>
               </li>

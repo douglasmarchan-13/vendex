@@ -1,15 +1,17 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
-  MessageCircle, Phone, ThumbsUp, Clock, PhoneMissed, PauseCircle, FileSpreadsheet, UploadCloud, ArrowRight, Check,
-  Copy, CheckCheck, Loader2,
+  MessageCircle, Phone, ThumbsUp, Clock, PhoneMissed, PauseCircle, Check,
+  Copy, CheckCheck,
 } from 'lucide-react'
 import { useApp } from '../store'
-import { CHANNELS, COUNTRIES, PRODUCTS, STAGES } from '../data/mock'
-import { at, diffDays, fmtDate } from '../lib/dates'
+import { useAuth } from '../auth/AuthContext'
+import { CHANNELS, COUNTRIES, STAGES } from '../data/mock'
+import { diffDays, fmtDate } from '../lib/dates'
 import { PayModal, PlanModal } from './CobranzaModals'
 import { CURRENCIES, convert, fmtMoney } from '../lib/money'
 import { Avatar, Button, Field, Flag, Modal, TEMPS, cx, inputCls } from './ui'
 import { mainDeal } from '../views/Clients'
+import ImportModal from './ImportModal'
 
 export default function Modals() {
   const { modal, closeModal } = useApp()
@@ -19,15 +21,16 @@ export default function Modals() {
 }
 
 function useResolveAlert() {
-  const { setData } = useApp()
-  return (alertId) => alertId && setData((d) => ({ ...d, alerts: d.alerts.filter((a) => a.id !== alertId) }))
+  const { removeAlert } = useApp()
+  return (alertId) => alertId && removeAlert(alertId)
 }
 
 /* ================= Nuevo trato ================= */
 const NEXT = [['Hoy', 0], ['Mañana', 1], ['En 3 días', 3], ['Próx. semana', 7]]
 
 function DealModal({ onClose, contactId }) {
-  const { data, addDeal, contactById, country: activeCountry, inCountry } = useApp()
+  const { data, addDeal, contactById, country: activeCountry, inCountry, catalogs } = useApp()
+  const PRODUCTS = catalogs?.products ?? []
   const fixed = contactId && contactById[contactId]
   const startCountry = fixed?.country || (activeCountry === 'ALL' ? 'PE' : activeCountry)
   const [mode, setMode] = useState(fixed ? 'existente' : 'nuevo')
@@ -165,23 +168,27 @@ function DealModal({ onClose, contactId }) {
 
 /* ================= WhatsApp ================= */
 function WhatsAppModal({ onClose, contactId, alertId, paymentId, template = 'seguimiento' }) {
-  const { contactById, data, money, original, logActivity, toast, setData } = useApp()
+  const { contactById, data, money, original, logActivity, toast, snooze } = useApp()
   const resolve = useResolveAlert()
   const c = contactById[contactId]
   const pay = paymentId && data.payments.find((p) => p.id === paymentId)
   const d = pay ? data.deals.find((x) => x.id === pay.dealId) : mainDeal(data.deals, c.id)
   const first = c.name.split(' ')[0]
+  // Firma con el usuario de la sesión y su empresa ("Douglas de Agro Andina")
+  const { user } = useAuth()
+  const me = user?.name?.trim().split(' ')[0] || 'su asesor'
+  const signature = user?.companyName ? `${me} de ${user.companyName}` : me
   const price = d ? (c.country === 'VE' ? original(d.amount, d.currency) : money(d.amount, d.currency)) : ''
   const owed = pay ? fmtMoney(pay.amount, pay.currency) : ''
   const late = pay ? -diffDays(pay.dueAt) : 0
   const when = !pay ? '' : late > 0 ? `venció el ${fmtDate(pay.dueAt)}` : late === 0 ? 'vence hoy' : `vence el ${fmtDate(pay.dueAt)}`
   const T = pay ? {
-    cobro: { label: 'Recordatorio amable', text: `Hola ${first}, buen día. Le escribe Andrés de Vendex. Le recordamos que el pago de ${pay.label.toLowerCase()} de su ${d?.product} por ${owed} ${when}. ¿Nos confirma la fecha de pago? Cualquier duda, con gusto le ayudo.` },
-    firme: { label: 'Cobro vencido', text: `Hola ${first}, le escribe Andrés de Vendex. Su pago de ${owed} (${pay.label.toLowerCase()}, ${d?.product}) ${when} y figura pendiente. Para mantener vigente su garantía y servicio técnico, le pedimos regularizarlo esta semana. ¿Qué día podemos contar con el pago?` },
+    cobro: { label: 'Recordatorio amable', text: `Hola ${first}, buen día. Le escribe ${signature}. Le recordamos que el pago de ${pay.label.toLowerCase()} de su ${d?.product} por ${owed} ${when}. ¿Nos confirma la fecha de pago? Cualquier duda, con gusto le ayudo.` },
+    firme: { label: 'Cobro vencido', text: `Hola ${first}, le escribe ${signature}. Su pago de ${owed} (${pay.label.toLowerCase()}, ${d?.product}) ${when} y figura pendiente. Para mantener vigente su garantía y servicio técnico, le pedimos regularizarlo esta semana. ¿Qué día podemos contar con el pago?` },
     acuerdo: { label: 'Proponer acuerdo', text: `Hola ${first}, entendemos que la campaña puede retrasar los ingresos. Para su pago de ${owed} podemos dividirlo en dos abonos. ¿Le parece bien la mitad esta semana y el resto en 15 días?` },
   } : {
-    seguimiento: { label: 'Seguimiento', text: `Hola ${first}, buen día. Le escribe Andrés de Vendex. ¿Pudo revisar la cotización de ${d?.product || 'la máquina'}${price ? ` (${price})` : ''}? Quedo atento a sus dudas para avanzar.` },
-    video: { label: 'Enviar video', text: `Hola ${first}, le escribe Andrés. Intenté llamarlo, le dejo un video de 40 segundos de ${d?.product || 'la máquina'} trabajando en planta. ¿Le llamo mañana a las 9 o prefiere a las 4?` },
+    seguimiento: { label: 'Seguimiento', text: `Hola ${first}, buen día. Le escribe ${signature}. ¿Pudo revisar la cotización de ${d?.product || 'la máquina'}${price ? ` (${price})` : ''}? Quedo atento a sus dudas para avanzar.` },
+    video: { label: 'Enviar video', text: `Hola ${first}, le escribe ${me}. Intenté llamarlo, le dejo un video de 40 segundos de ${d?.product || 'la máquina'} trabajando en planta. ¿Le llamo mañana a las 9 o prefiere a las 4?` },
     separar: { label: 'Separar equipo', text: `Hola ${first}, ¡felicitaciones por la aprobación del crédito! Puede separar ${d?.product || 'su equipo'} con solo 30% de adelanto y asegurar la entrega antes de la campaña. ¿Le preparo la proforma?` },
     promo: { label: 'Promoción', text: `Hola ${first}, este mes tenemos instalación y capacitación gratis en secadoras y 10% de descuento al contado en molinos compactos. ¿Le interesa que le envíe el detalle?` },
   }
@@ -192,7 +199,7 @@ function WhatsAppModal({ onClose, contactId, alertId, paymentId, template = 'seg
   const send = () => {
     logActivity(c.id, 'whatsapp', `WhatsApp ${pay ? 'de cobranza ' : ''}enviado: “${text.length > 110 ? text.slice(0, 110) + '…' : text}”`)
     resolve(alertId)
-    if (pay) setData((x) => ({ ...x, snoozed: { ...x.snoozed, [`cobro-${pay.id}`]: at(1, 0) } }))
+    if (pay) snooze(`cobro-${pay.id}`, 1, { silent: true })
     toast(`Mensaje registrado para ${first} (envío simulado)`, { tone: 'success' })
     onClose()
   }
@@ -313,125 +320,6 @@ function SplitModal({ onClose, contactId, alertId }) {
       <Field label={`Tipo de cambio del día (${CURRENCIES[local].symbol} por US$ 1)`} className="mt-4">
         <input className={inputCls} type="number" step="0.01" value={rate} onChange={(e) => setRate(Number(e.target.value) || 0)} />
       </Field>
-    </Modal>
-  )
-}
-
-/* ================= Importar Excel ================= */
-const MAP = [
-  ['FECHA', 'Fecha de registro'],
-  ['TELEFONO', 'Teléfono (con prefijo de país)'],
-  ['CONTACTO/CLIENTE', 'Nombre del cliente'],
-  ['EMPRESA', 'Empresa'],
-  ['RUC/DNI · CEDULA', 'Documento (RUC, NIT, RIF)'],
-  ['PRODUCTO', 'Producto de interés'],
-  ['MONTO', 'Monto + moneda'],
-  ['CONTACTO (Facebook, TikTok…)', 'Canal de origen / vendedor'],
-  ['UBICACIÓN · LUGAR', 'Ciudad y región'],
-  ['STATUS 1, 2, 3…', 'Historial de seguimiento (línea de tiempo)'],
-]
-const COLORS = [
-  ['bg-red-500', 'Rojo', 'Por ahora no / No contesta'],
-  ['bg-yellow-300', 'Amarillo', 'Tibio · en evaluación'],
-  ['bg-sky-400', 'Celeste', 'Caliente · interesado'],
-  ['bg-green-500', 'Verde', 'Venta cerrada'],
-]
-
-function ImportModal({ onClose }) {
-  const { toast } = useApp()
-  const [step, setStep] = useState(0)
-  const [file, setFile] = useState('')
-  const [progress, setProgress] = useState(0)
-  const sheets = useMemo(() => [
-    { name: 'BASE DE DATOS CLIENTES', rows: 148, flag: 'PE' },
-    { name: 'BOLIVIA', rows: 8, flag: 'BO' },
-    { name: 'CLIENTES POTENCIALES', rows: 37, flag: 'PE' },
-  ], [])
-  const total = sheets.reduce((s, x) => s + x.rows, 0)
-
-  useEffect(() => {
-    if (step !== 2) return
-    const t = setInterval(() => setProgress((p) => {
-      if (p >= 100) { clearInterval(t); return 100 }
-      return p + 7
-    }), 90)
-    return () => clearInterval(t)
-  }, [step])
-
-  return (
-    <Modal
-      open
-      onClose={onClose}
-      wide
-      title="Importar desde Excel"
-      subtitle="Trae tu hoja de clientes tal como la tienes hoy"
-      footer={
-        step === 0 ? <Button variant="ghost" onClick={onClose}>Cancelar</Button>
-          : step === 1 ? <><Button variant="ghost" onClick={() => setStep(0)}>Atrás</Button><Button variant="primary" onClick={() => setStep(2)}>Importar {total} registros <ArrowRight size={16} /></Button></>
-            : <Button variant={progress >= 100 ? 'success' : 'secondary'} disabled={progress < 100} onClick={() => { toast('Vista previa: la importación real se activa con el backend', { tone: 'success' }); onClose() }}>{progress >= 100 ? 'Listo' : 'Importando…'}</Button>
-      }
-    >
-      {step === 0 && (
-        <div className="space-y-3">
-          <label className="flex cursor-pointer flex-col items-center rounded-2xl border-2 border-dashed border-slate-300 px-6 py-10 text-center transition hover:border-indigo-400 hover:bg-indigo-50/40">
-            <UploadCloud size={30} className="text-indigo-500" />
-            <p className="mt-3 font-medium text-slate-800">Arrastra tu archivo o haz clic para elegirlo</p>
-            <p className="text-sm text-slate-500">.xlsx, .xls o .csv · todas las hojas a la vez</p>
-            <input type="file" accept=".xlsx,.xls,.csv" className="sr-only" onChange={(e) => { const n = e.target.files?.[0]?.name; if (n) { setFile(n); setStep(1) } }} />
-          </label>
-          <button onClick={() => { setFile('CLIENTES 2024-2025.xlsx'); setStep(1) }} className="flex w-full items-center gap-3 rounded-xl p-3 text-left ring-1 ring-slate-200 hover:bg-slate-50">
-            <FileSpreadsheet size={22} className="text-emerald-600" />
-            <span className="flex-1 text-sm"><b className="font-medium text-slate-800">Probar con un archivo de ejemplo</b><span className="block text-slate-500">CLIENTES 2024-2025.xlsx · 3 hojas</span></span>
-            <ArrowRight size={16} className="text-slate-400" />
-          </button>
-        </div>
-      )}
-
-      {step === 1 && (
-        <div className="space-y-5">
-          <div className="flex items-center gap-3 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">
-            <FileSpreadsheet size={20} /> <span className="min-w-0 flex-1 truncate"><b className="font-semibold">{file}</b> · {sheets.length} hojas detectadas</span>
-          </div>
-          <ul className="grid gap-2 sm:grid-cols-3">
-            {sheets.map((s) => (
-              <li key={s.name} className="rounded-xl p-3 ring-1 ring-slate-200">
-                <p className="flex items-center gap-1.5 text-xs font-semibold text-slate-700"><Flag code={s.flag} className="h-2.5 w-[15px]" /> {s.name}</p>
-                <p className="mt-1 text-sm text-slate-500">{s.rows} filas</p>
-              </li>
-            ))}
-          </ul>
-          <div>
-            <h3 className="text-sm font-semibold text-slate-800">Columnas reconocidas</h3>
-            <ul className="mt-2 divide-y divide-slate-100 rounded-xl ring-1 ring-slate-200">
-              {MAP.map(([a, b]) => (
-                <li key={a} className="flex items-center gap-2 px-3 py-2 text-sm">
-                  <span className="w-[42%] truncate font-mono text-xs text-slate-500">{a}</span>
-                  <ArrowRight size={14} className="shrink-0 text-slate-300" />
-                  <span className="flex-1 text-slate-800">{b}</span>
-                  <Check size={15} className="text-emerald-500" />
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div>
-            <h3 className="text-sm font-semibold text-slate-800">Los colores de tus filas se convierten en estados</h3>
-            <ul className="mt-2 grid gap-2 sm:grid-cols-2">
-              {COLORS.map(([cls, n, m]) => (
-                <li key={n} className="flex items-center gap-2.5 text-sm"><span className={cx('h-4 w-4 rounded', cls)} /> <b className="font-medium text-slate-700">{n}</b> <ArrowRight size={12} className="text-slate-300" /> <span className="text-slate-600">{m}</span></li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      )}
-
-      {step === 2 && (
-        <div className="py-6 text-center">
-          {progress < 100 ? <Loader2 size={32} className="mx-auto animate-spin text-indigo-600" /> : <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-emerald-100 text-emerald-600"><Check size={26} /></span>}
-          <p className="mt-3 font-semibold text-slate-900">{progress < 100 ? 'Leyendo filas y deduplicando teléfonos…' : `${total} registros listos`}</p>
-          <p className="text-sm text-slate-500">{progress < 100 ? `${Math.min(progress, 100)}%` : '12 duplicados unidos · 31 seguimientos convertidos en tareas'}</p>
-          <div className="mx-auto mt-4 h-2 max-w-xs overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-indigo-600 transition-all" style={{ width: `${Math.min(progress, 100)}%` }} /></div>
-        </div>
-      )}
     </Modal>
   )
 }

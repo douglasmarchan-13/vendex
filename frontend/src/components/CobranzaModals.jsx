@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Banknote, CalendarClock, ReceiptText } from 'lucide-react'
 import { useApp } from '../store'
-import { COUNTRIES, PAY_METHODS } from '../data/mock'
+import { COUNTRIES } from '../data/mock'
 import { CURRENCIES, convert, fmtMoney } from '../lib/money'
 import { buildPlan, dueText } from '../lib/cobranza'
 import { at, fmtDate } from '../lib/dates'
@@ -11,11 +11,12 @@ const round2 = (x) => Math.round(x * 100) / 100
 
 /* ================= Registrar pago ================= */
 export function PayModal({ onClose, paymentId }) {
-  const { data, contactById, registerPayment } = useApp()
+  const { data, contactById, registerPayment, catalogs } = useApp()
+  const PAY_METHODS = catalogs?.payMethods ?? {}
   const p = data.payments.find((x) => x.id === paymentId)
   const deal = p && data.deals.find((x) => x.id === p.dealId)
   const c = p && contactById[p.contactId]
-  const methods = PAY_METHODS[c?.country] || PAY_METHODS.PE
+  const methods = PAY_METHODS[c?.country] || PAY_METHODS.PE || []
   const [amount, setAmount] = useState(p ? String(p.amount) : '')
   const [cur, setCur] = useState(p?.currency || 'USD')
   const [method, setMethod] = useState(methods[0])
@@ -110,10 +111,11 @@ const KINDS = [
 ]
 
 export function PlanModal({ onClose, dealId }) {
-  const { data, contactById, createPlan } = useApp()
+  const { data, contactById, createPlan, catalogs } = useApp()
+  const PAY_METHODS = catalogs?.payMethods ?? {}
   const deal = data.deals.find((x) => x.id === dealId)
   const c = deal && contactById[deal.contactId]
-  const methods = PAY_METHODS[c?.country] || PAY_METHODS.PE
+  const methods = PAY_METHODS[c?.country] || PAY_METHODS.PE || []
   const [kind, setKind] = useState('mitad')
   const [days, setDays] = useState(7)
   const [initialPct, setInitialPct] = useState(30)

@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { Search, MessageCircle, Phone, Mail, History, FileSpreadsheet, Users } from 'lucide-react'
 import { useApp } from '../store'
-import { SELLERS } from '../data/mock'
 import { Avatar, Button, Card, Chip, Empty, Flag, TempBadge, cx } from '../components/ui'
 import { diffDays, rel } from '../lib/dates'
 
@@ -119,7 +118,7 @@ export function QuickActions({ c, size = 'icon' }) {
 }
 
 function Row({ c, client }) {
-  const { data, money, openContact, lastContact } = useApp()
+  const { data, money, openContact, lastContact, sellers: SELLERS } = useApp()
   const d = mainDeal(data.deals, c.id)
   const lc = lastContact(c)
   const stale = !client && diffDays(lc) <= -7

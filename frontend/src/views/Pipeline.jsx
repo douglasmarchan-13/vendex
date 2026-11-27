@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { Search, ArrowRight, ArrowRightLeft, Package, CalendarDays, PauseCircle, Plus, GripVertical, PartyPopper } from 'lucide-react'
 import { useApp } from '../store'
-import { SELLERS, STAGES } from '../data/mock'
+import { STAGES } from '../data/mock'
 import { Avatar, Button, Chip, Flag, TempBadge, TEMPS, cx } from '../components/ui'
 import { diffDays, rel } from '../lib/dates'
 
 export default function Pipeline() {
-  const { data, contactById, inCountry, usd, fromUSD, moveDeal, openModal } = useApp()
+  const { data, contactById, inCountry, usd, fromUSD, moveDeal, openModal, sellers: SELLERS, canManage, sellerFilter } = useApp()
   const [q, setQ] = useState('')
   const [temp, setTemp] = useState('all')
   const [owner, setOwner] = useState('all')
@@ -19,7 +19,7 @@ export default function Pipeline() {
     const c = contactById[d.contactId]
     if (!c || !inCountry(c.country)) return false
     if (temp !== 'all' && d.temp !== temp) return false
-    if (owner !== 'all' && c.owner !== owner) return false
+    if (canManage && sellerFilter === 'ALL' && owner !== 'all' && c.owner !== owner) return false
     if (q && !norm(`${c.name} ${c.company} ${d.product} ${c.city}`).includes(norm(q))) return false
     return true
   })
@@ -42,16 +42,21 @@ export default function Pipeline() {
           {Object.entries(TEMPS).map(([k, t]) => (
             <Chip key={k} active={temp === k} onClick={() => setTemp(k)}><t.icon size={13} /> {t.label}</Chip>
           ))}
-          <span className="mx-1 w-px shrink-0 bg-slate-200" />
-          <select
-            value={owner}
-            onChange={(e) => setOwner(e.target.value)}
-            className="h-8 shrink-0 rounded-full border-0 bg-white px-3 text-[13px] font-medium text-slate-600 ring-1 ring-inset ring-slate-200"
-            aria-label="Vendedor"
-          >
-            <option value="all">Todo el equipo</option>
-            {Object.values(SELLERS).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+          {/* El vendedor solo ve lo suyo; el gerente filtra aquí si no eligió un vendedor arriba */}
+          {canManage && sellerFilter === 'ALL' && (
+            <>
+              <span className="mx-1 w-px shrink-0 bg-slate-200" />
+              <select
+                value={owner}
+                onChange={(e) => setOwner(e.target.value)}
+                className="h-8 shrink-0 rounded-full border-0 bg-white px-3 text-[13px] font-medium text-slate-600 ring-1 ring-inset ring-slate-200"
+                aria-label="Vendedor"
+              >
+                <option value="all">Todo el equipo</option>
+                {Object.values(SELLERS).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </>
+          )}
         </div>
         <p className="hidden text-xs text-slate-400 xl:ml-auto xl:block">Arrastra las tarjetas entre columnas</p>
       </div>
@@ -124,7 +129,7 @@ export default function Pipeline() {
 }
 
 function DealCard({ d, dragging, onDrag }) {
-  const { contactById, money, original, currency, moveDeal, openContact, pauseDeal } = useApp()
+  const { contactById, money, original, currency, moveDeal, openContact, pauseDeal, sellers: SELLERS } = useApp()
   const c = contactById[d.contactId]
   const idx = STAGES.findIndex((s) => s.id === d.stage)
   const next = STAGES[idx + 1]

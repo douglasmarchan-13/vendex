@@ -4,7 +4,7 @@ import {
   UserRound, Coins, Plus, Send, Banknote,
 } from 'lucide-react'
 import { useApp, stageName } from '../store'
-import { COUNTRIES, SELLERS } from '../data/mock'
+import { COUNTRIES } from '../data/mock'
 import { CURRENCIES, fmtMoney } from '../lib/money'
 import { Avatar, Button, Flag, TEMPS, cx } from './ui'
 import { fmtDate, fmtTime, rel } from '../lib/dates'
@@ -20,11 +20,13 @@ export const TL = {
   nota: { icon: StickyNote, cls: 'bg-slate-100 text-slate-600', label: 'Nota' },
   vista: { icon: Eye, cls: 'bg-rose-100 text-rose-600', label: 'Actividad' },
   correo: { icon: Mail, cls: 'bg-slate-100 text-slate-600', label: 'Correo' },
+  email: { icon: Mail, cls: 'bg-slate-100 text-slate-600', label: 'Correo' },
   pago: { icon: Banknote, cls: 'bg-emerald-100 text-emerald-700', label: 'Pago' },
 }
 
 export default function ClientDrawer() {
   const app = useApp()
+  const SELLERS = app.sellers
   const { drawer, closeDrawer, contactById, data, money, original, currency, setTemp, openModal, logActivity, toast } = app
   const c = drawer && contactById[drawer]
   const [type, setType] = useState('nota')

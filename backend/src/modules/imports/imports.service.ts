@@ -5,6 +5,7 @@ import { ApiError } from '../../common/errors/api-error.js'
 import { ClockService } from '../../core/clock.service.js'
 import { SupabaseService } from '../../core/supabase.service.js'
 import type { Json } from '../../database/database.types.js'
+import { type DebtRow, parseDebtsWorkbook } from './excel/debts.js'
 import { groupRows, type ImportContact, type ImportDeal } from './excel/group.js'
 import { fold, phoneKey } from './excel/normalize.js'
 import { parseWorkbook, type SheetSummary } from './excel/parse-workbook.js'
@@ -103,7 +104,7 @@ export class ImportsService {
     let query = db.from('import_batches').select('*').eq('company_id', t.companyId).order('created_at', { ascending: false }).limit(50)
     if (t.role === 'vendedor') query = query.eq('seller_id', t.actorId)
     const rows = await q(query)
-    return rows.map((r) => ({ id: r.id, fileName: r.file_name, sellerId: r.seller_id, summary: r.summary, createdAt: r.created_at, undoneAt: r.undone_at }))
+    return rows.map((r) => ({ id: r.id, kind: r.kind, fileName: r.file_name, sellerId: r.seller_id, summary: r.summary, createdAt: r.created_at, undoneAt: r.undone_at }))
   }
 
   /** Deshace una importación */
@@ -116,8 +117,148 @@ export class ImportsService {
   }
 
   // ---------------------------------------------------------------------------
+  // Deudas por cobrar (Excel de cobranza)
+  // ---------------------------------------------------------------------------
 
-  private async analyze(t: Tenant, file: UploadedXlsx | undefined): Promise<{ sheets: SheetSummary[]; contacts: Analyzed[] }> {
+  /** Vista previa del Excel de deudas: ventas y cuotas que se crearían, sin guardar nada */
+  async previewDebts(t: Tenant, file: UploadedXlsx | undefined) {
+    const { sheets, debts } = await this.analyzeDebts(t, file)
+    const today = this.clock.today()
+    return {
+      fileName: file!.originalname,
+      sheets: sheets.map((s) => ({ name: s.name, found: s.headerRow !== null, rows: s.rows, cutoff: s.cutoff, title: s.title })),
+      summary: summarizeDebts(debts, today),
+      debts: debts.map((d) => ({
+        key: d.key,
+        status: d.status,
+        name: d.name,
+        doc: d.doc,
+        voucher: d.voucher,
+        product: d.product,
+        year: d.year,
+        currency: d.currency,
+        country: d.country,
+        total: d.total,
+        pending: sum(d.installments.map((q) => q.amount)),
+        installments: d.installments.map((q) => ({ label: q.label, amount: q.amount, dueDate: q.dueDate, overdue: q.dueDate < today })),
+        abonos: d.abonos,
+        issues: d.issues,
+      })),
+    }
+  }
+
+  /** Importa las deudas: una venta cerrada por fila, con sus cuotas en Cobranza */
+  async commitDebts(t: Tenant, file: UploadedXlsx | undefined, opts: CommitOptions) {
+    const { debts } = await this.analyzeDebts(t, file)
+    const exclude = new Set(opts.exclude)
+    const chosen = debts.filter((d) => (d.status === 'nuevo' || d.status === 'existente') && !exclude.has(d.key))
+    if (!chosen.length) throw new ApiError(400, 'No hay deudas para importar')
+    const today = this.clock.today()
+    const items = chosen.map((d) => this.debtItem(d, today))
+    const res = (await this.sb.rpc('import_contacts', {
+      p_company: t.companyId,
+      p_seller: t.actorId,
+      p_file: file!.originalname.slice(0, 200),
+      p_summary: { ...summarizeDebts(debts, today), excluded: exclude.size } as Json,
+      p_items: items as unknown as Json,
+      p_kind: 'deudas',
+    })) as { batch_id: string; contacts: number; deals: number; payments: number; activities: number }
+    return { id: res.batch_id, contacts: res.contacts, deals: res.deals, payments: res.payments, activities: res.activities }
+  }
+
+  private async analyzeDebts(t: Tenant, file: UploadedXlsx | undefined) {
+    const wb = await this.loadWorkbook(file)
+    const parsed = parseDebtsWorkbook(wb, this.parseOpts())
+    if (!parsed.sheets.some((s) => s.headerRow !== null)) {
+      throw new ApiError(400, 'No se encontró el encabezado (CLIENTE, VENCIMIENTOS…) en ninguna hoja')
+    }
+    // El Excel de deudas no trae teléfono: el cliente se reconoce por su nombre o por su RUC/DNI
+    const existing = await this.companyContacts(t.companyId)
+    const byName = new Map<string, ExistingContact>()
+    const byDoc = new Map<string, ExistingContact>()
+    for (const e of existing) {
+      const n = personKey(e.name)
+      if (n && !byName.has(n)) byName.set(n, e)
+      const doc = e.doc.replace(/\s/g, '')
+      if (doc.length >= 7 && !byDoc.has(doc)) byDoc.set(doc, e)
+    }
+    const matches = parsed.rows.map((d) => (d.doc.length >= 7 ? byDoc.get(d.doc) : undefined) ?? byName.get(personKey(d.name)) ?? null)
+    const ids = [...new Set(matches.filter((m): m is ExistingContact => !!m).map((m) => m.id))]
+    const { products } = await this.existingDetail(ids)
+
+    const debts: AnalyzedDebt[] = parsed.rows.map((d, i) => {
+      const e = matches[i]
+      if (d.invalid) return { ...d, status: 'incompleto', existingId: null }
+      if (!e) return { ...d, status: 'nuevo', existingId: null }
+      if (t.role === 'vendedor' && e.owner_id !== t.actorId) return { ...d, status: 'otro_vendedor', existingId: e.id }
+      // Ya se importó esta venta (mismo comprobante)
+      if (products.get(e.id)?.has(fold(d.product))) return { ...d, status: 'sin_cambios', existingId: e.id }
+      return { ...d, status: 'existente', existingId: e.id }
+    })
+    return { sheets: parsed.sheets, debts }
+  }
+
+  /** Deuda analizada → elemento para import_contacts() */
+  private debtItem(d: AnalyzedDebt, today: string) {
+    // La fecha de la venta no viene en el Excel: se usa el 1 de enero del AÑO para no inflar las ventas del mes
+    const saleDay = d.year ? `${d.year}-01-01` : today
+    const saleAt = this.clock.localIso(saleDay < today ? saleDay : today, 9)
+    const pending = sum(d.installments.map((q) => q.amount))
+    const payments = [
+      ...d.abonos.map((a) => ({
+        n: a.n,
+        of: d.installments[0]?.of ?? a.n,
+        label: `Abono · ${a.label}`,
+        amount: a.amount,
+        due_at: this.clock.localIso(a.dueDate, 9),
+        paid_at: this.clock.localIso(a.dueDate < today ? a.dueDate : today, 12),
+        method: 'Registrado en Excel',
+        ref: '',
+      })),
+      ...d.installments.map((q) => ({ n: q.n, of: q.of, label: q.label, amount: q.amount, due_at: this.clock.localIso(q.dueDate, 9), paid_at: null, method: '', ref: '' })),
+    ]
+    const money = (n: number) => `${d.currency} ${n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    const activities = [
+      {
+        at: this.clock.localIso(today, 9),
+        type: 'nota',
+        text: `Deuda importada del Excel${d.voucher ? ` · comprobante ${d.voucher}` : ''}: ${d.installments.length} cuota${d.installments.length === 1 ? '' : 's'} pendiente${d.installments.length === 1 ? '' : 's'} por ${money(pending)}.`,
+      },
+      ...d.abonos.map((a, i) => ({ at: this.clock.localIso(today, 9, i + 1), type: 'pago', text: `Abonó ${money(a.amount)} (${a.label}), registrado en el Excel de deudas.` })),
+    ]
+    return {
+      existing_id: d.status === 'existente' ? d.existingId : null,
+      contact: {
+        name: d.name.slice(0, 200),
+        company: '',
+        country_code: d.country,
+        phone: d.phone,
+        doc: d.doc.slice(0, 40),
+        temp: 'caliente',
+        created_at: saleAt,
+      },
+      deals: [
+        {
+          product: d.product.slice(0, 200),
+          amount: d.total,
+          currency: d.currency,
+          stage: 'cerrado',
+          temp: 'caliente',
+          next_at: null,
+          next_action: '',
+          created_at: saleAt,
+          closed_at: saleAt,
+          payments,
+        },
+      ],
+      activities,
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+
+  /** Valida y abre el .xlsx subido */
+  private async loadWorkbook(file: UploadedXlsx | undefined): Promise<ExcelJS.Workbook> {
     if (!file?.buffer?.length) throw new ApiError(400, 'Adjunta el archivo de Excel (.xlsx)')
     if (file.size > MAX_FILE) throw new ApiError(400, 'El archivo pesa más de 10 MB')
     if (!/\.xlsx$/i.test(file.originalname)) throw new ApiError(400, 'El archivo debe ser .xlsx (en Excel: Guardar como → Libro de Excel)')
@@ -127,8 +268,17 @@ export class ImportsService {
     } catch {
       throw new ApiError(400, 'No se pudo leer el archivo. ¿Es un Excel (.xlsx) válido?')
     }
+    return wb
+  }
+
+  private parseOpts() {
     const today = this.clock.today()
-    const opts = { today, currentYear: Number(today.slice(0, 4)) }
+    return { today, currentYear: Number(today.slice(0, 4)) }
+  }
+
+  private async analyze(t: Tenant, file: UploadedXlsx | undefined): Promise<{ sheets: SheetSummary[]; contacts: Analyzed[] }> {
+    const wb = await this.loadWorkbook(file)
+    const opts = this.parseOpts()
     const parsed = parseWorkbook(wb, opts)
     if (!parsed.sheets.some((s) => s.headerRow !== null)) {
       throw new ApiError(400, 'No se encontró el encabezado (FECHA, TELEFONO, CONTACTO/CLIENTE…) en ninguna hoja')
@@ -268,6 +418,40 @@ export function activityType(text: string): string {
   if (/CORREO|EMAIL/.test(f)) return 'email'
   if (/LLAM|CONTEST|CONTESA|TELF|TELEFON|APAGADO|CONVERS/.test(f)) return 'llamada'
   return 'nota'
+}
+
+type AnalyzedDebt = DebtRow & { status: RowStatus; existingId: string | null }
+
+const sum = (xs: number[]) => Math.round(xs.reduce((s, x) => s + x, 0) * 100) / 100
+
+/** Nombre para comparar personas: sin tildes, signos ni tratamientos (SR, DON…) */
+function personKey(name: string): string {
+  return fold(name).replace(/[^A-Z ]/g, ' ').replace(/\b(SR|SRA|SRTA|DON|DONA|ING)\b/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function summarizeDebts(debts: AnalyzedDebt[], today: string) {
+  const count = (s: RowStatus) => debts.filter((d) => d.status === s).length
+  const importable = debts.filter((d) => d.status === 'nuevo' || d.status === 'existente')
+  const pendingByCurrency: Record<string, number> = {}
+  const overdueByCurrency: Record<string, number> = {}
+  for (const d of importable) {
+    for (const q of d.installments) {
+      pendingByCurrency[d.currency] = sum([pendingByCurrency[d.currency] ?? 0, q.amount])
+      if (q.dueDate < today) overdueByCurrency[d.currency] = sum([overdueByCurrency[d.currency] ?? 0, q.amount])
+    }
+  }
+  return {
+    total: debts.length,
+    nuevo: count('nuevo'),
+    existente: count('existente'),
+    sinCambios: count('sin_cambios'),
+    otroVendedor: count('otro_vendedor'),
+    incompleto: count('incompleto'),
+    payments: importable.reduce((n, d) => n + d.installments.length, 0),
+    abonos: importable.reduce((n, d) => n + d.abonos.length, 0),
+    pendingByCurrency,
+    overdueByCurrency,
+  }
 }
 
 function summarize(contacts: Analyzed[]) {

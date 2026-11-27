@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { COUNTRIES } from './data/mock'
 import { convert, fmtMoney, toUSD } from './lib/money'
-import { at } from './lib/dates'
+import { at, fmtTime, rel } from './lib/dates'
+import { dueIso } from './lib/cobranza'
 import { endpoints, SELLER_ID } from './lib/api'
 import { useAuth } from './auth/AuthContext'
 
@@ -229,6 +230,13 @@ export function AppProvider({ children }) {
       send(() => endpoints.logActivity(contactId, type, text))
     }
 
+    /** Agrega al historial una actividad que el servidor ya guardó (p. ej. al adjuntar una cotización) */
+    const addSavedActivity = (contactId, act) =>
+      setData((d) => ({
+        ...d,
+        contacts: d.contacts.map((c) => (c.id === contactId ? { ...c, timeline: [act, ...c.timeline] } : c)),
+      }))
+
     const snooze = (id, days = 1, { silent = false } = {}) => {
       const until = at(days, 0)
       const local = (d) => ({ ...d, snoozed: { ...d.snoozed, [id]: until } })
@@ -267,6 +275,7 @@ export function AppProvider({ children }) {
       openModal: (type, props = {}) => setModal({ type, ...props }),
       closeModal: () => setModal(null),
       logActivity,
+      addSavedActivity,
 
       moveDeal(dealId, stage) {
         const deal = dataRef.current.deals.find((x) => x.id === dealId)
@@ -296,13 +305,15 @@ export function AppProvider({ children }) {
         const deal = dataRef.current.deals.find((x) => x.id === dealId)
         if (!deal) return
         const now = new Date().toISOString()
+        // Cada pago trae su fecha exacta (date: YYYY-MM-DD); dueDays queda por compatibilidad
+        const due = (it) => (it.date ? dueIso(it.date) : at(it.dueDays ?? 0, 9))
         setData((d) => ({
           ...d,
           payments: [
             ...d.payments.filter((p) => p.dealId !== dealId || p.paidAt),
             ...items.map((it, i) => ({
               id: newId('p'), dealId, contactId: deal.contactId, currency: deal.currency,
-              n: it.n, of: it.of, label: it.label, amount: it.amount, dueAt: at(it.dueDays, 9),
+              n: it.n, of: it.of, label: it.label, amount: it.amount, dueAt: due(it),
               ...(firstPaid && i === 0 ? { paidAt: now, method: firstPaid, ref: '' } : {}),
             })),
           ],
@@ -310,7 +321,7 @@ export function AppProvider({ children }) {
         send(() =>
           endpoints.createPlan(
             dealId,
-            items.map((it) => ({ n: it.n, of: it.of, label: it.label, amount: it.amount, dueAt: at(it.dueDays, 9) })),
+            items.map((it) => ({ n: it.n, of: it.of, label: it.label, amount: it.amount, dueAt: due(it) })),
             firstPaid || null
           )
         )
@@ -348,6 +359,35 @@ export function AppProvider({ children }) {
       isSnoozed: (id) => (data.snoozed?.[id] || '') > new Date().toISOString(),
       snooze,
 
+      /* ---------- Clientes ---------- */
+      /** Si el servidor rechaza el cambio (p. ej. nombre repetido), avisa y la resincronización restaura los datos */
+      updateContact(contactId, patch) {
+        if (!Object.keys(patch).length) return
+        setData((d) => ({ ...d, contacts: d.contacts.map((c) => (c.id === contactId ? { ...c, ...patch } : c)) }))
+        send(() => endpoints.updateContact(contactId, patch))
+        toast('Datos del cliente actualizados', { tone: 'success' })
+      },
+
+      /** Solo para clientes sin ventas cerradas ni cuotas (el backend también lo exige) */
+      removeContact(contactId) {
+        const c = dataRef.current.contacts.find((x) => x.id === contactId)
+        if (!c) return
+        setDrawer((id) => (id === contactId ? null : id))
+        withUndo(
+          `Cliente eliminado: ${c.name}`,
+          (d) => {
+            // Se quita el contacto y todo lo que cuelga de él (tratos, tareas, avisos…), como hace la base
+            const next = { ...d }
+            for (const [k, v] of Object.entries(d)) {
+              if (Array.isArray(v)) next[k] = k === 'contacts' ? v.filter((x) => x.id !== contactId) : v.filter((x) => x?.contactId !== contactId)
+            }
+            return next
+          },
+          undefined,
+          () => endpoints.removeContact(contactId)
+        )
+      },
+
       addDeal(f) {
         const body = {
           product: f.product,
@@ -355,9 +395,11 @@ export function AppProvider({ children }) {
           currency: f.currency,
           stage: f.stage || 'nuevo',
           temp: f.temp,
-          nextDays: Number(f.nextDays) || 0,
           nextAction: f.nextAction || 'Primer contacto',
         }
+        // Fecha y hora exactas del próximo contacto; si no, "dentro de N días" (9:00)
+        if (f.nextAt) body.nextAt = f.nextAt
+        else body.nextDays = Number(f.nextDays) || 0
         if (f.contactId) body.contactId = f.contactId
         else
           body.contact = {
@@ -372,7 +414,19 @@ export function AppProvider({ children }) {
               contacts: contact ? [contact, ...d.contacts] : d.contacts,
               deals: [deal, ...d.deals],
             }))
-            toast(`Trato agregado: ${f.product}`, { tone: 'success' })
+            // Próximo contacto como tarea de la agenda: aparece en "Hoy" y en la campana cuando se acerca
+            if (f.task && deal.nextAt) {
+              const title = f.nextAction?.trim() || 'Primer contacto'
+              send(() => endpoints.addTask({ at: deal.nextAt, type: f.task, contactId: deal.contactId, title })).then(
+                (created) => setData((d) => ({ ...d, tasks: [...d.tasks, created] })),
+                () => {}
+              )
+              toast(`Trato agregado. Te avisaré ${rel(deal.nextAt).toLowerCase()} a las ${fmtTime(deal.nextAt)}: ${title}`, { tone: 'success' })
+            } else {
+              toast(`Trato agregado: ${f.product}`, { tone: 'success' })
+            }
+            // Si se registró ya como venta cerrada, pedir el plan de cobro (igual que al mover el trato)
+            if (deal.stage === 'cerrado') setModal({ type: 'plan', dealId: deal.id })
           },
           () => {}
         )

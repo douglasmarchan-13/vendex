@@ -16,6 +16,7 @@ import { PlatformModule } from './modules/platform/platform.module.js'
 import { SettingsModule } from './modules/settings/settings.module.js'
 import { StrategyModule } from './modules/strategy/strategy.module.js'
 import { TasksModule } from './modules/tasks/tasks.module.js'
+import { TemplatesModule } from './modules/templates/templates.module.js'
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { TasksModule } from './modules/tasks/tasks.module.js'
     AlertsModule,
     StrategyModule,
     SettingsModule,
+    TemplatesModule,
   ],
   controllers: [HealthController],
   // Todas las rutas pasan por AuthGuard (sesión + rol) salvo las marcadas con @Public()

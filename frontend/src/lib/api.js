@@ -111,8 +111,29 @@ export const importsApi = {
   preview: (file) => http.post('/imports/preview', xlsxForm(file)),
   /** options: { exclude: key[], sold: key[] } → { id, contacts, deals, activities } */
   commit: (file, options) => http.post('/imports', xlsxForm(file, options)),
+  /** Excel de deudas por cobrar (Cobranza) */
+  previewDebts: (file) => http.post('/imports/debts/preview', xlsxForm(file)),
+  /** options: { exclude: key[] } → { id, contacts, deals, payments, activities } */
+  commitDebts: (file, options) => http.post('/imports/debts', xlsxForm(file, options)),
   list: () => http.get('/imports'),
   undo: (id) => http.post(`/imports/${enc(id)}/undo`),
+}
+
+/** Cotizaciones (PDF) de la ficha del cliente */
+export const filesApi = {
+  list: (contactId) => http.get(`/contacts/${enc(contactId)}/files`),
+  /** { file, dealId?, note? } → { file, activity } */
+  upload: (contactId, { file, dealId, note }) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('kind', 'cotizacion')
+    if (dealId) fd.append('dealId', dealId)
+    if (note) fd.append('note', note)
+    return http.post(`/contacts/${enc(contactId)}/files`, fd)
+  },
+  /** → { url, fileName, expiresIn }: enlace firmado que vence en 5 minutos */
+  url: (contactId, fileId) => http.get(`/contacts/${enc(contactId)}/files/${enc(fileId)}/url`),
+  remove: (contactId, fileId) => http.del(`/contacts/${enc(contactId)}/files/${enc(fileId)}`),
 }
 
 // En la base el tipo de actividad es 'email'; la interfaz lo llama 'correo'
@@ -127,6 +148,10 @@ export const endpoints = {
   logActivity: (contactId, type, text, at) =>
     http.post(`/contacts/${enc(contactId)}/activities`, { type: ACTIVITY_TYPE[type] || type, text, at }),
   setTemp: (contactId, temp) => http.put(`/contacts/${enc(contactId)}/temp`, { temp }),
+  /** Solo los campos enviados: { name?, company?, country?, city?, region?, phone?, doc?, email?, channel? } */
+  updateContact: (contactId, patch) => http.patch(`/contacts/${enc(contactId)}`, patch),
+  /** 409 si el cliente tiene ventas cerradas o cuotas */
+  removeContact: (contactId) => http.del(`/contacts/${enc(contactId)}`),
 
   addDeal: (f) => http.post('/deals', f),
   moveDeal: (dealId, stage) => http.post(`/deals/${enc(dealId)}/move`, { stage }),
@@ -147,4 +172,9 @@ export const endpoints = {
   setGoal: (goalUSD) => http.put('/settings/goal', { goalUSD }),
   setPlan: (patch) => http.patch('/settings/plan', patch),
   setRates: (rates) => http.patch('/settings/rates', rates),
+
+  /** Plantillas de WhatsApp del vendedor de la sesión */
+  listTemplates: () => http.get('/templates'),
+  saveTemplate: (key, t) => http.put(`/templates/${enc(key)}`, { kind: t.kind, label: t.label, body: t.body }),
+  removeTemplate: (key) => http.del(`/templates/${enc(key)}`),
 }

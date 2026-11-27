@@ -303,6 +303,78 @@ export type Database = {
           },
         ];
       };
+      contact_files: {
+        Row: {
+          company_id: string;
+          contact_id: string;
+          created_at: string;
+          deal_id: string | null;
+          file_name: string;
+          id: string;
+          kind: string;
+          note: string;
+          size_bytes: number;
+          storage_path: string;
+          uploaded_by: string | null;
+        };
+        ComputedFields: never;
+        Insert: {
+          company_id: string;
+          contact_id: string;
+          created_at?: string;
+          deal_id?: string | null;
+          file_name: string;
+          id?: string;
+          kind?: string;
+          note?: string;
+          size_bytes: number;
+          storage_path: string;
+          uploaded_by?: string | null;
+        };
+        Update: {
+          company_id?: string;
+          contact_id?: string;
+          created_at?: string;
+          deal_id?: string | null;
+          file_name?: string;
+          id?: string;
+          kind?: string;
+          note?: string;
+          size_bytes?: number;
+          storage_path?: string;
+          uploaded_by?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "contact_files_company_id_fkey";
+            columns: ["company_id"];
+            isOneToOne: false;
+            referencedRelation: "companies";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "contact_files_contact_id_fkey";
+            columns: ["contact_id"];
+            isOneToOne: false;
+            referencedRelation: "contacts";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "contact_files_deal_id_fkey";
+            columns: ["deal_id"];
+            isOneToOne: false;
+            referencedRelation: "deals";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "contact_files_uploaded_by_fkey";
+            columns: ["uploaded_by"];
+            isOneToOne: false;
+            referencedRelation: "sellers";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       contacts: {
         Row: {
           channel: string | null;
@@ -467,6 +539,7 @@ export type Database = {
           created_at: string;
           file_name: string;
           id: string;
+          kind: string;
           seller_id: string | null;
           summary: Json;
           undone_at: string | null;
@@ -477,6 +550,7 @@ export type Database = {
           created_at?: string;
           file_name: string;
           id?: string;
+          kind?: string;
           seller_id?: string | null;
           summary?: Json;
           undone_at?: string | null;
@@ -486,6 +560,7 @@ export type Database = {
           created_at?: string;
           file_name?: string;
           id?: string;
+          kind?: string;
           seller_id?: string | null;
           summary?: Json;
           undone_at?: string | null;
@@ -651,6 +726,55 @@ export type Database = {
           },
           {
             foreignKeyName: "invitations_seller_id_fkey";
+            columns: ["seller_id"];
+            isOneToOne: false;
+            referencedRelation: "sellers";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      message_templates: {
+        Row: {
+          body: string;
+          company_id: string;
+          created_at: string;
+          key: string;
+          kind: string;
+          label: string;
+          seller_id: string;
+          updated_at: string;
+        };
+        ComputedFields: never;
+        Insert: {
+          body: string;
+          company_id: string;
+          created_at?: string;
+          key: string;
+          kind?: string;
+          label: string;
+          seller_id: string;
+          updated_at?: string;
+        };
+        Update: {
+          body?: string;
+          company_id?: string;
+          created_at?: string;
+          key?: string;
+          kind?: string;
+          label?: string;
+          seller_id?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "message_templates_company_id_fkey";
+            columns: ["company_id"];
+            isOneToOne: false;
+            referencedRelation: "companies";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "message_templates_seller_id_fkey";
             columns: ["seller_id"];
             isOneToOne: false;
             referencedRelation: "sellers";
@@ -1184,7 +1308,7 @@ export type Database = {
       gen_random_uuid: { Args: Record<PropertyKey, never>; Returns: string };
       gen_salt: { Args: { "": string }; Returns: string };
       import_contacts: {
-        Args: { p_company: string; p_file: string; p_items: Json; p_seller: string; p_summary: Json };
+        Args: { p_company: string; p_file: string; p_items: Json; p_kind?: string; p_seller: string; p_summary: Json };
         Returns: Json;
       };
       import_undo: {

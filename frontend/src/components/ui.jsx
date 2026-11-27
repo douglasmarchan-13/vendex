@@ -77,6 +77,7 @@ export function Button({ variant = 'secondary', size = 'md', className, children
     secondary: 'bg-white text-slate-700 ring-1 ring-inset ring-slate-200 hover:bg-slate-50',
     ghost: 'text-slate-600 hover:bg-slate-100',
     success: 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm shadow-emerald-600/20',
+    danger: 'bg-rose-600 text-white hover:bg-rose-700 shadow-sm shadow-rose-600/20',
     wa: 'bg-[#25D366]/10 text-[#128C4A] ring-1 ring-inset ring-[#25D366]/30 hover:bg-[#25D366]/20',
   }[variant]
   const s = { sm: 'h-8 px-2.5 text-xs gap-1.5', md: 'h-10 px-3.5 text-sm gap-2', icon: 'h-9 w-9 justify-center' }[size]

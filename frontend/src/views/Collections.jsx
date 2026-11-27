@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Search, MessageCircle, Banknote, CircleAlert, CalendarClock, CalendarDays, CircleCheck, Receipt, Plus } from 'lucide-react'
+import { Search, MessageCircle, Banknote, CircleAlert, CalendarClock, CalendarDays, CircleCheck, Receipt, Plus, FileSpreadsheet } from 'lucide-react'
 import { useApp } from '../store'
 import { COUNTRIES } from '../data/mock'
 import { Avatar, Button, Card, Chip, Empty, Flag, cx } from '../components/ui'
@@ -91,6 +91,9 @@ export default function Collections() {
                 </Chip>
               ))}
             </div>
+            <Button variant="secondary" className="lg:ml-auto" onClick={() => openModal('importDebts')}>
+              <FileSpreadsheet size={16} className="text-emerald-600" /> Importar deudas
+            </Button>
           </div>
 
           {list.length === 0 ? (

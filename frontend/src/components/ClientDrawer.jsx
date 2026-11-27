@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   X, Phone, MessageCircle, Mail, MapPin, FileText, CircleDollarSign, StickyNote, Eye, Video, IdCard, Megaphone,
-  UserRound, Coins, Plus, Send, Banknote,
+  UserRound, Coins, Plus, Send, Banknote, Pencil,
 } from 'lucide-react'
 import { useApp, stageName } from '../store'
 import { COUNTRIES } from '../data/mock'
@@ -9,6 +9,7 @@ import { CURRENCIES, fmtMoney } from '../lib/money'
 import { Avatar, Button, Flag, TEMPS, cx } from './ui'
 import { fmtDate, fmtTime, rel } from '../lib/dates'
 import { PAY_UI, dueText, payStatus } from '../lib/cobranza'
+import ContactFiles from './ContactFiles'
 
 export const TL = {
   llamada: { icon: Phone, cls: 'bg-indigo-100 text-indigo-600', label: 'Llamada' },
@@ -75,6 +76,7 @@ export default function ClientDrawer() {
               <p className="text-sm text-slate-500">{c.company || 'Persona natural'}</p>
               <p className="mt-1 flex items-center gap-1.5 text-sm text-slate-600"><Flag code={c.country} /> {c.city}{c.region && `, ${c.region}`} · {country.name}</p>
             </div>
+            <Button variant="ghost" size="icon" onClick={() => openModal('contact', { contactId: c.id })} title="Editar o eliminar cliente" aria-label="Editar cliente"><Pencil size={17} /></Button>
             <Button variant="ghost" size="icon" onClick={closeDrawer} aria-label="Cerrar"><X size={18} /></Button>
           </div>
           <div className="mt-4 flex gap-1 rounded-xl bg-slate-100 p-1">
@@ -123,6 +125,8 @@ export default function ClientDrawer() {
             ))}
             {deals.length === 0 && <li className="text-sm text-slate-500">Sin tratos todavía.</li>}
           </ul>
+
+          <ContactFiles key={c.id} contact={c} deals={deals} />
 
           {pays.length > 0 && (
             <>

@@ -1,22 +1,25 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   MessageCircle, Phone, ThumbsUp, Clock, PhoneMissed, PauseCircle, Check,
-  Copy, CheckCheck,
+  Copy, CheckCheck, Pencil, Plus, RotateCcw, Trash2, CalendarDays,
 } from 'lucide-react'
+import { endpoints } from '../lib/api'
+import { VARS, isDefaultKey, mergeTemplates, renderTemplate, waLink, waPhone } from '../lib/whatsapp'
 import { useApp } from '../store'
 import { useAuth } from '../auth/AuthContext'
 import { CHANNELS, COUNTRIES, STAGES } from '../data/mock'
-import { diffDays, fmtDate } from '../lib/dates'
+import { at, diffDays, fmtDate, fmtTime, rel } from '../lib/dates'
 import { PayModal, PlanModal } from './CobranzaModals'
 import { CURRENCIES, convert, fmtMoney } from '../lib/money'
 import { Avatar, Button, Field, Flag, Modal, TEMPS, cx, inputCls } from './ui'
 import { mainDeal } from '../views/Clients'
 import ImportModal from './ImportModal'
+import DebtImportModal from './DebtImportModal'
 
 export default function Modals() {
   const { modal, closeModal } = useApp()
   if (!modal) return null
-  const P = { deal: DealModal, wa: WhatsAppModal, call: CallModal, split: SplitModal, import: ImportModal, rates: RatesModal, pay: PayModal, plan: PlanModal }[modal.type]
+  const P = { deal: DealModal, contact: ContactModal, wa: WhatsAppModal, call: CallModal, split: SplitModal, import: ImportModal, importDebts: DebtImportModal, rates: RatesModal, pay: PayModal, plan: PlanModal }[modal.type]
   return P ? <P {...modal} onClose={closeModal} /> : null
 }
 
@@ -27,6 +30,16 @@ function useResolveAlert() {
 
 /* ================= Nuevo trato ================= */
 const NEXT = [['Hoy', 0], ['Mañana', 1], ['En 3 días', 3], ['Próx. semana', 7]]
+/** Para "Hoy": si la hora elegida ya pasó, propone la próxima hora en punto */
+const laterToday = (time) => {
+  const [h, m] = (time || '09:00').split(':').map(Number)
+  const now = new Date()
+  if (h * 60 + m > now.getHours() * 60 + now.getMinutes()) return time
+  return `${String(Math.min(23, now.getHours() + 1)).padStart(2, '0')}:00`
+}
+const TASK_TYPES = [['llamada', 'Llamada'], ['whatsapp', 'WhatsApp'], ['visita', 'Visita de campo'], ['reunion', 'Reunión']]
+/** Igual que en el servidor: sin mayúsculas, tildes ni espacios sobrantes */
+const nameKey = (s) => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/\s+/g, ' ').trim()
 
 function DealModal({ onClose, contactId }) {
   const { data, addDeal, contactById, country: activeCountry, inCountry, catalogs } = useApp()
@@ -37,7 +50,8 @@ function DealModal({ onClose, contactId }) {
   const [f, setF] = useState({
     contactId: contactId || '', name: '', company: '', country: startCountry, city: '', phone: '', doc: '',
     product: '', amount: '', currency: COUNTRIES[startCountry].display, temp: 'tibio', channel: 'WhatsApp',
-    stage: 'nuevo', nextDays: 1, nextAction: '', note: '',
+    stage: 'nuevo', nextDays: 1, nextDate: '', nextTime: '09:00', nextAction: '', note: '',
+    makeTask: true, taskType: 'llamada',
   })
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e?.target ? e.target.value : e }))
 
@@ -47,13 +61,20 @@ function DealModal({ onClose, contactId }) {
   }
   const pickCountry = (c) => setF((x) => ({ ...x, country: c, currency: COUNTRIES[c].display }))
   const existing = data.contacts.filter((c) => inCountry(c.country))
-  const valid = f.product.trim() && (mode === 'nuevo' ? f.name.trim() : f.contactId)
+  const duplicate = mode === 'nuevo' && nameKey(f.name) ? data.contacts.find((c) => nameKey(c.name) === nameKey(f.name)) : null
+  // Próximo contacto: un atajo (hoy, mañana…) o una fecha elegida, siempre con hora
+  const custom = f.nextDays === 'custom'
+  const [hh, mm] = (f.nextTime || '09:00').split(':').map(Number)
+  const nextAt = custom ? (f.nextDate ? new Date(`${f.nextDate}T${f.nextTime || '09:00'}`).toISOString() : '') : at(f.nextDays, hh, mm)
+  const pastNext = nextAt && new Date(nextAt) < new Date(Date.now() - 60000)
+  const valid = f.product.trim() && (mode === 'nuevo' ? f.name.trim() && !duplicate : f.contactId) && nextAt && !pastNext
 
   const submit = (e) => {
     e.preventDefault()
     if (!valid) return
     const c = mode === 'existente' ? contactById[f.contactId] : null
-    addDeal({ ...f, contactId: mode === 'existente' ? f.contactId : '', country: c?.country || f.country })
+    if (f.makeTask && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {})
+    addDeal({ ...f, contactId: mode === 'existente' ? f.contactId : '', country: c?.country || f.country, nextAt, task: f.makeTask ? f.taskType : null })
     onClose()
   }
 
@@ -99,7 +120,17 @@ function DealModal({ onClose, contactId }) {
                   </div>
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <Field label="Nombre del cliente *"><input className={inputCls} value={f.name} onChange={set('name')} placeholder="Ej. Juan Pérez Flores" required /></Field>
+                  <Field label="Nombre del cliente *">
+                    <input className={cx(inputCls, duplicate && 'border-rose-400 focus:border-rose-500 focus:ring-rose-200')} value={f.name} onChange={set('name')} placeholder="Ej. Juan Pérez Flores" required aria-invalid={!!duplicate} />
+                    {duplicate && (
+                      <span className="mt-1 block text-xs text-rose-600">
+                        Ya tienes un cliente con ese nombre ({duplicate.name}).{' '}
+                        {inCountry(duplicate.country) && <button type="button" className="font-medium underline" onClick={() => { setMode('existente'); setF((x) => ({ ...x, contactId: duplicate.id })) }}>
+                          Usar el existente
+                        </button>}
+                      </span>
+                    )}
+                  </Field>
                   <Field label="Empresa"><input className={inputCls} value={f.company} onChange={set('company')} placeholder="Opcional" /></Field>
                   <Field label="Teléfono">
                     <div className="flex">
@@ -152,78 +183,340 @@ function DealModal({ onClose, contactId }) {
           </Field>
         </div>
 
-        <div>
-          <span className="mb-1.5 block text-[13px] font-medium text-slate-700">Próximo seguimiento</span>
+        <div className="rounded-xl bg-slate-50 p-3">
+          <span className="mb-1.5 block text-[13px] font-medium text-slate-700">Próximo contacto con el cliente</span>
           <div className="flex flex-wrap gap-2">
-            {NEXT.map(([l, n]) => (
-              <button type="button" key={n} onClick={() => set('nextDays')(n)} className={cx('h-9 rounded-full px-3.5 text-sm font-medium ring-1 ring-inset', f.nextDays === n ? 'bg-slate-900 text-white ring-slate-900' : 'text-slate-600 ring-slate-200')}>{l}</button>
+            {[...NEXT, ['Otra fecha', 'custom']].map(([l, n]) => (
+              <button type="button" key={n} onClick={() => setF((x) => ({ ...x, nextDays: n, nextTime: n === 0 ? laterToday(x.nextTime) : x.nextTime }))} className={cx('h-9 rounded-full px-3.5 text-sm font-medium ring-1 ring-inset', f.nextDays === n ? 'bg-slate-900 text-white ring-slate-900' : 'bg-white text-slate-600 ring-slate-200')}>
+                {n === 'custom' && <CalendarDays size={14} className="-mt-0.5 mr-1 inline" />}{l}
+              </button>
             ))}
           </div>
-          <input className={cx(inputCls, 'mt-2')} value={f.nextAction} onChange={set('nextAction')} placeholder="¿Qué harás? Ej. Enviar video de la máquina" />
+          <div className={cx('mt-3 grid gap-3', custom ? 'grid-cols-2 sm:grid-cols-[1fr_120px_1fr]' : 'grid-cols-[120px_1fr]')}>
+            {custom && (
+              <Field label="Fecha">
+                <input type="date" className={inputCls} min={new Date().toLocaleDateString('en-CA')} value={f.nextDate} onChange={set('nextDate')} required />
+              </Field>
+            )}
+            <Field label="Hora"><input type="time" className={inputCls} value={f.nextTime} onChange={set('nextTime')} required /></Field>
+            <Field label="¿Cómo lo contactarás?">
+              <select className={inputCls} value={f.taskType} onChange={set('taskType')}>
+                {TASK_TYPES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select>
+            </Field>
+          </div>
+          <input className={cx(inputCls, 'mt-3')} value={f.nextAction} onChange={set('nextAction')} placeholder="¿Qué harás? Ej. Enviar video de la máquina" />
+          {pastNext && <p className="mt-1 text-xs text-rose-600">Esa fecha y hora ya pasó.</p>}
+          {nextAt && !pastNext && (
+            <p className="mt-2 text-xs text-slate-500">
+              {rel(nextAt)}, {fmtDate(nextAt)} a las {fmtTime(nextAt)}
+            </p>
+          )}
+          <label className="mt-3 flex items-start gap-2 text-sm text-slate-700">
+            <input type="checkbox" className="mt-0.5 h-4 w-4 accent-indigo-600" checked={f.makeTask} onChange={(e) => setF((x) => ({ ...x, makeTask: e.target.checked }))} />
+            <span>
+              Crear la tarea en mi agenda y avisarme
+              <span className="block text-xs text-slate-500">Aparece en “Hoy” y en la campana el día anterior, y te llega un aviso 15 minutos antes y a la hora.</span>
+            </span>
+          </label>
         </div>
       </form>
     </Modal>
   )
 }
 
+/* ================= Editar / eliminar cliente ================= */
+const CONTACT_FIELDS = ['name', 'company', 'country', 'city', 'region', 'phone', 'doc', 'email', 'channel']
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+function ContactModal({ onClose, contactId }) {
+  const { data, contactById, updateContact, removeContact } = useApp()
+  const c = contactById[contactId]
+  const [f, setF] = useState(() => Object.fromEntries(CONTACT_FIELDS.map((k) => [k, c?.[k] ?? ''])))
+  const [confirming, setConfirming] = useState(false)
+  if (!c) return null
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }))
+
+  const duplicate = nameKey(f.name) && nameKey(f.name) !== nameKey(c.name) ? data.contacts.find((x) => x.id !== c.id && nameKey(x.name) === nameKey(f.name)) : null
+  const badEmail = f.email.trim() !== '' && !EMAIL_RE.test(f.email.trim())
+  const valid = f.name.trim() && !duplicate && !badEmail
+  const channels = c.channel && !CHANNELS.includes(c.channel) ? [c.channel, ...CHANNELS] : CHANNELS
+
+  // Se borra solo si no hay ventas ni cobros: borrar arrastraría tratos, cuotas e historial
+  const deals = data.deals.filter((d) => d.contactId === c.id)
+  const pays = data.payments.filter((p) => p.contactId === c.id)
+  const blocked = pays.length > 0 || deals.some((d) => d.stage === 'cerrado')
+
+  const save = (e) => {
+    e.preventDefault()
+    if (!valid) return
+    const patch = {}
+    for (const k of CONTACT_FIELDS) {
+      const v = k === 'channel' ? f[k] || null : String(f[k]).trim()
+      if (v !== (c[k] ?? (k === 'channel' ? null : ''))) patch[k] = v
+    }
+    updateContact(c.id, patch)
+    onClose()
+  }
+
+  const footer = confirming ? (
+    <>
+      <p className="mr-auto self-center text-sm text-rose-700">¿Eliminar a {c.name}{deals.length ? ` y ${deals.length} trato${deals.length > 1 ? 's' : ''}` : ''}?</p>
+      <Button variant="ghost" onClick={() => setConfirming(false)}>No, volver</Button>
+      <Button variant="danger" onClick={() => { removeContact(c.id); onClose() }}><Trash2 size={15} /> Sí, eliminar</Button>
+    </>
+  ) : (
+    <>
+      <Button variant="ghost" className="mr-auto text-rose-600 hover:bg-rose-50" disabled={blocked} title={blocked ? 'Tiene ventas o cobros registrados' : undefined} onClick={() => setConfirming(true)}>
+        <Trash2 size={15} /> Eliminar cliente
+      </Button>
+      <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+      <Button variant="primary" type="submit" form="contact-form" disabled={!valid}>Guardar cambios</Button>
+    </>
+  )
+
+  return (
+    <Modal open onClose={onClose} wide title="Editar cliente" subtitle={c.company || c.name} footer={footer}>
+      <form id="contact-form" onSubmit={save} className="space-y-4">
+        <div>
+          <span className="mb-1.5 block text-[13px] font-medium text-slate-700">País</span>
+          <div className="grid grid-cols-3 gap-2">
+            {Object.values(COUNTRIES).map((k) => (
+              <button type="button" key={k.code} onClick={() => setF((x) => ({ ...x, country: k.code }))} className={cx('flex h-10 items-center justify-center gap-2 rounded-lg text-sm font-medium ring-1 ring-inset', f.country === k.code ? 'bg-indigo-50 text-indigo-700 ring-indigo-300' : 'text-slate-600 ring-slate-200')}>
+                <Flag code={k.code} /> {k.name}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Nombre del cliente *">
+            <input className={cx(inputCls, duplicate && 'border-rose-400 focus:border-rose-500 focus:ring-rose-200')} value={f.name} onChange={set('name')} required aria-invalid={!!duplicate} />
+            {duplicate && <span className="mt-1 block text-xs text-rose-600">Ya existe otro cliente con ese nombre ({duplicate.name}).</span>}
+          </Field>
+          <Field label="Empresa"><input className={inputCls} value={f.company} onChange={set('company')} placeholder="Opcional" /></Field>
+          <Field label="Teléfono">
+            <div className="flex">
+              <span className="grid place-items-center rounded-l-lg border border-r-0 border-slate-200 bg-slate-50 px-3 text-sm text-slate-500">{COUNTRIES[f.country].prefix}</span>
+              <input className={cx(inputCls, 'rounded-l-none')} inputMode="tel" value={f.phone} onChange={set('phone')} placeholder="999 999 999" />
+            </div>
+          </Field>
+          <Field label={COUNTRIES[f.country].doc}><input className={inputCls} value={f.doc} onChange={set('doc')} placeholder="Opcional" /></Field>
+          <Field label="Correo">
+            <input className={cx(inputCls, badEmail && 'border-rose-400')} type="email" value={f.email} onChange={set('email')} placeholder="Opcional" aria-invalid={badEmail} />
+            {badEmail && <span className="mt-1 block text-xs text-rose-600">Revisa el correo.</span>}
+          </Field>
+          <Field label="¿Cómo llegó?">
+            <select className={inputCls} value={f.channel || ''} onChange={set('channel')}>
+              <option value="">—</option>
+              {channels.map((x) => <option key={x}>{x}</option>)}
+            </select>
+          </Field>
+          <Field label="Ciudad / localidad"><input className={inputCls} value={f.city} onChange={set('city')} /></Field>
+          <Field label="Región / departamento"><input className={inputCls} value={f.region} onChange={set('region')} placeholder="Opcional" /></Field>
+        </div>
+        {blocked && (
+          <p className="rounded-xl bg-amber-50 p-3 text-xs text-amber-800">
+            Este cliente tiene ventas o cobros registrados, así que no se puede eliminar (se perderían sus cuotas y pagos). Si ya no te interesa, pasa sus tratos abiertos a “Por ahora no”.
+          </p>
+        )}
+      </form>
+    </Modal>
+  )
+}
+
 /* ================= WhatsApp ================= */
+// Plantillas del vendedor: se piden una vez por sesión de la página y se reutilizan entre aperturas del modal
+let templatesCache = null
+function useMyTemplates(onLoad) {
+  const [list, setList] = useState(templatesCache)
+  useEffect(() => {
+    if (templatesCache) return
+    let alive = true
+    endpoints.listTemplates()
+      .then((r) => { templatesCache = r || []; if (alive) { setList(templatesCache); onLoad?.(templatesCache) } })
+      .catch(() => { if (alive) setList([]) }) // sin backend: quedan las plantillas por defecto
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const update = (next) => { templatesCache = next; setList(next) }
+  return [list, update]
+}
+
 function WhatsAppModal({ onClose, contactId, alertId, paymentId, template = 'seguimiento' }) {
   const { contactById, data, money, original, logActivity, toast, snooze } = useApp()
   const resolve = useResolveAlert()
   const c = contactById[contactId]
   const pay = paymentId && data.payments.find((p) => p.id === paymentId)
   const d = pay ? data.deals.find((x) => x.id === pay.dealId) : mainDeal(data.deals, c.id)
-  const first = c.name.split(' ')[0]
+  const kind = pay ? 'cobranza' : 'venta'
   // Firma con el usuario de la sesión y su empresa ("Douglas de Agro Andina")
   const { user } = useAuth()
   const me = user?.name?.trim().split(' ')[0] || 'su asesor'
-  const signature = user?.companyName ? `${me} de ${user.companyName}` : me
-  const price = d ? (c.country === 'VE' ? original(d.amount, d.currency) : money(d.amount, d.currency)) : ''
-  const owed = pay ? fmtMoney(pay.amount, pay.currency) : ''
   const late = pay ? -diffDays(pay.dueAt) : 0
-  const when = !pay ? '' : late > 0 ? `venció el ${fmtDate(pay.dueAt)}` : late === 0 ? 'vence hoy' : `vence el ${fmtDate(pay.dueAt)}`
-  const T = pay ? {
-    cobro: { label: 'Recordatorio amable', text: `Hola ${first}, buen día. Le escribe ${signature}. Le recordamos que el pago de ${pay.label.toLowerCase()} de su ${d?.product} por ${owed} ${when}. ¿Nos confirma la fecha de pago? Cualquier duda, con gusto le ayudo.` },
-    firme: { label: 'Cobro vencido', text: `Hola ${first}, le escribe ${signature}. Su pago de ${owed} (${pay.label.toLowerCase()}, ${d?.product}) ${when} y figura pendiente. Para mantener vigente su garantía y servicio técnico, le pedimos regularizarlo esta semana. ¿Qué día podemos contar con el pago?` },
-    acuerdo: { label: 'Proponer acuerdo', text: `Hola ${first}, entendemos que la campaña puede retrasar los ingresos. Para su pago de ${owed} podemos dividirlo en dos abonos. ¿Le parece bien la mitad esta semana y el resto en 15 días?` },
-  } : {
-    seguimiento: { label: 'Seguimiento', text: `Hola ${first}, buen día. Le escribe ${signature}. ¿Pudo revisar la cotización de ${d?.product || 'la máquina'}${price ? ` (${price})` : ''}? Quedo atento a sus dudas para avanzar.` },
-    video: { label: 'Enviar video', text: `Hola ${first}, le escribe ${me}. Intenté llamarlo, le dejo un video de 40 segundos de ${d?.product || 'la máquina'} trabajando en planta. ¿Le llamo mañana a las 9 o prefiere a las 4?` },
-    separar: { label: 'Separar equipo', text: `Hola ${first}, ¡felicitaciones por la aprobación del crédito! Puede separar ${d?.product || 'su equipo'} con solo 30% de adelanto y asegurar la entrega antes de la campaña. ¿Le preparo la proforma?` },
-    promo: { label: 'Promoción', text: `Hola ${first}, este mes tenemos instalación y capacitación gratis en secadoras y 10% de descuento al contado en molinos compactos. ¿Le interesa que le envíe el detalle?` },
+  const vars = {
+    nombre: c.name.split(' ')[0],
+    asesor: me,
+    empresa: user?.companyName || '',
+    firma: user?.companyName ? `${me} de ${user.companyName}` : me,
+    producto: d?.product || (pay ? 'equipo' : 'la máquina'),
+    precio: d ? (c.country === 'VE' ? original(d.amount, d.currency) : money(d.amount, d.currency)) : '',
+    monto: pay ? fmtMoney(pay.amount, pay.currency) : '',
+    cuota: pay ? pay.label.toLowerCase() : '',
+    vencimiento: !pay ? '' : late > 0 ? `venció el ${fmtDate(pay.dueAt)}` : late === 0 ? 'vence hoy' : `vence el ${fmtDate(pay.dueAt)}`,
   }
+  const phone = waPhone(c.phone, c.country)
+
   const start = pay ? (template === 'firme' || late > 0 ? 'firme' : 'cobro') : template
   const [k, setK] = useState(start)
-  const [text, setText] = useState(T[start]?.text || Object.values(T)[0].text)
+  const [text, setText] = useState(() => {
+    const T0 = mergeTemplates(templatesCache || [], kind)
+    return renderTemplate((T0.find((t) => t.key === start) || T0[0]).body, vars)
+  })
+  const [editing, setEditing] = useState(null) // { key, label, body, isNew }
+  const [saving, setSaving] = useState(false)
+  // true en cuanto el vendedor toca el mensaje o elige otra plantilla
+  const touched = useRef(false)
+  // Al llegar las plantillas del vendedor, si aún no tocó nada se muestra su versión
+  const [custom, setCustom] = useMyTemplates((list) => {
+    if (touched.current) return
+    const t = mergeTemplates(list, kind).find((x) => x.key === start)
+    if (t) setText(renderTemplate(t.body, vars))
+  })
+  const T = mergeTemplates(custom || [], kind)
+  const current = T.find((t) => t.key === k) || T[0]
+
+  const pick = (t) => { setK(t.key); touched.current = true; setText(renderTemplate(t.body, vars)); setEditing(null) }
 
   const send = () => {
+    if (!phone) return
+    // Se abre en el mismo clic para que el navegador no lo bloquee como ventana emergente
+    window.open(waLink(phone, text), '_blank', 'noopener')
     logActivity(c.id, 'whatsapp', `WhatsApp ${pay ? 'de cobranza ' : ''}enviado: “${text.length > 110 ? text.slice(0, 110) + '…' : text}”`)
     resolve(alertId)
     if (pay) snooze(`cobro-${pay.id}`, 1, { silent: true })
-    toast(`Mensaje registrado para ${first} (envío simulado)`, { tone: 'success' })
+    toast(`Abriendo WhatsApp con ${vars.nombre}`, { tone: 'success' })
     onClose()
   }
+
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text); toast('Mensaje copiado') } catch { toast('No se pudo copiar') }
+  }
+
+  const saveTemplate = async () => {
+    const t = { key: editing.key, kind, label: editing.label.trim(), body: editing.body.trim() }
+    if (!t.label || !t.body) return
+    setSaving(true)
+    try {
+      const saved = await endpoints.saveTemplate(t.key, t)
+      setCustom([...(custom || []).filter((x) => x.key !== t.key), saved || t])
+      touched.current = true; setK(t.key); setText(renderTemplate(t.body, vars)); setEditing(null)
+      toast('Plantilla guardada. La usarás en tus próximos mensajes', { tone: 'success' })
+    } catch (e) {
+      toast(`No se pudo guardar la plantilla: ${e.message}`)
+    } finally { setSaving(false) }
+  }
+
+  // Plantilla propia → se elimina. Plantilla por defecto editada → vuelve al texto original.
+  const removeTemplate = async () => {
+    const key = editing.key
+    setSaving(true)
+    try {
+      await endpoints.removeTemplate(key)
+      const next = (custom || []).filter((x) => x.key !== key)
+      setCustom(next)
+      const fallback = mergeTemplates(next, kind).find((t) => t.key === key) || mergeTemplates(next, kind)[0]
+      pick(fallback)
+      toast(isDefaultKey(key) ? 'Plantilla restaurada al texto original' : 'Plantilla eliminada')
+    } catch (e) {
+      toast(`No se pudo completar: ${e.message}`)
+    } finally { setSaving(false) }
+  }
+
+  const insertVar = (v) => {
+    const el = document.getElementById('wa-template-body')
+    const token = `{${v}}`
+    const s = el?.selectionStart ?? editing.body.length
+    const e = el?.selectionEnd ?? s
+    setEditing((x) => ({ ...x, body: x.body.slice(0, s) + token + x.body.slice(e) }))
+    requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(s + token.length, s + token.length) })
+  }
+
+  const footer = editing ? (
+    <>
+      {!editing.isNew && (editing.own || editing.edited) && (
+        <Button variant="ghost" className="mr-auto text-rose-600" disabled={saving} onClick={removeTemplate}>
+          {editing.own ? <><Trash2 size={15} /> Eliminar</> : <><RotateCcw size={15} /> Restaurar original</>}
+        </Button>
+      )}
+      <Button variant="ghost" onClick={() => setEditing(null)}>Volver</Button>
+      <Button variant="primary" disabled={saving || !editing.label.trim() || !editing.body.trim()} onClick={saveTemplate}>Guardar plantilla</Button>
+    </>
+  ) : (
+    <>
+      <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+      <Button variant="secondary" onClick={copy}><Copy size={15} /> Copiar</Button>
+      <Button className="bg-[#25D366] text-white hover:bg-[#1fb757]" disabled={!phone || !text.trim()} onClick={send}><MessageCircle size={16} /> Abrir en WhatsApp</Button>
+    </>
+  )
 
   return (
     <Modal
       open
       onClose={onClose}
       title={<span className="flex items-center gap-2"><MessageCircle size={18} className="text-[#25D366]" /> WhatsApp a {c.name}</span>}
-      subtitle={<span className="flex items-center gap-1.5"><Flag code={c.country} /> {c.phone}</span>}
-      footer={<><Button variant="ghost" onClick={onClose}>Cancelar</Button><Button className="bg-[#25D366] text-white hover:bg-[#1fb757]" onClick={send}><MessageCircle size={16} /> Enviar mensaje</Button></>}
+      subtitle={<span className="flex items-center gap-1.5"><Flag code={c.country} /> {c.phone || 'Sin teléfono'}</span>}
+      footer={footer}
     >
       <div className="-mx-1 mb-3 flex gap-2 overflow-x-auto px-1 pb-1">
-        {Object.entries(T).map(([key, t]) => (
-          <button key={key} onClick={() => { setK(key); setText(t.text) }} className={cx('h-8 shrink-0 rounded-full px-3 text-[13px] font-medium ring-1 ring-inset', k === key ? 'bg-[#25D366]/15 text-[#128C4A] ring-[#25D366]/40' : 'text-slate-600 ring-slate-200')}>{t.label}</button>
+        {T.map((t) => (
+          <button key={t.key} onClick={() => pick(t)} className={cx('h-8 shrink-0 rounded-full px-3 text-[13px] font-medium ring-1 ring-inset', !editing?.isNew && k === t.key ? 'bg-[#25D366]/15 text-[#128C4A] ring-[#25D366]/40' : 'text-slate-600 ring-slate-200')}>
+            {t.label}{(t.own || t.edited) && <span className="ml-1 text-[10px] text-slate-400">•</span>}
+          </button>
         ))}
+        <button
+          onClick={() => { touched.current = true; setEditing({ key: `custom-${Date.now().toString(36)}`, label: '', body: current.body, isNew: true }) }}
+          className={cx('flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium border border-dashed', editing?.isNew ? 'border-indigo-300 bg-indigo-50 text-indigo-700' : 'border-slate-300 text-slate-500')}
+        >
+          <Plus size={13} /> Nueva
+        </button>
       </div>
-      <div className="rounded-xl bg-[#EFEAE2] p-3">
-        <div className="ml-auto max-w-[92%] rounded-xl rounded-tr-sm bg-[#D9FDD3] p-1 shadow-sm">
-          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} className="w-full resize-none bg-transparent px-2 py-1 text-base leading-relaxed text-slate-800 outline-none sm:text-sm" aria-label="Mensaje" />
-          <div className="flex items-center justify-end gap-1 px-2 pb-1 text-[11px] text-slate-500">ahora <CheckCheck size={14} className="text-sky-500" /></div>
+
+      {editing ? (
+        <div className="space-y-3">
+          <Field label="Nombre de la plantilla">
+            <input className={inputCls} value={editing.label} maxLength={60} onChange={(e) => setEditing((x) => ({ ...x, label: e.target.value }))} placeholder="Ej. Saludo de campaña" autoFocus={editing.isNew} />
+          </Field>
+          <Field label="Mensaje" hint="Toca una variable para insertarla; se completa sola con los datos de cada cliente">
+            <textarea id="wa-template-body" className={cx(inputCls, 'h-auto py-2 leading-relaxed')} rows={5} maxLength={2000} value={editing.body} onChange={(e) => setEditing((x) => ({ ...x, body: e.target.value }))} />
+          </Field>
+          <div className="flex flex-wrap gap-1.5">
+            {VARS.filter((v) => !v.kind || v.kind === kind).map((v) => (
+              <button key={v.key} type="button" title={v.label} onClick={() => insertVar(v.key)} className="h-7 rounded-md bg-slate-100 px-2 font-mono text-[12px] text-slate-600 hover:bg-slate-200">{`{${v.key}}`}</button>
+            ))}
+          </div>
+          <div className="rounded-xl bg-[#EFEAE2] p-3">
+            <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">Vista previa con {c.name.split(' ')[0]}</p>
+            <div className="ml-auto max-w-[92%] whitespace-pre-wrap rounded-xl rounded-tr-sm bg-[#D9FDD3] px-3 py-2 text-sm leading-relaxed text-slate-800 shadow-sm">{renderTemplate(editing.body, vars) || '…'}</div>
+          </div>
         </div>
-      </div>
-      <p className="mt-2 text-xs text-slate-500">Puedes editar el mensaje. Quedará guardado en el historial del cliente.</p>
+      ) : (
+        <>
+          <div className="rounded-xl bg-[#EFEAE2] p-3">
+            <div className="ml-auto max-w-[92%] rounded-xl rounded-tr-sm bg-[#D9FDD3] p-1 shadow-sm">
+              <textarea value={text} onChange={(e) => { touched.current = true; setText(e.target.value) }} rows={5} className="w-full resize-none bg-transparent px-2 py-1 text-base leading-relaxed text-slate-800 outline-none sm:text-sm" aria-label="Mensaje" />
+              <div className="flex items-center justify-end gap-1 px-2 pb-1 text-[11px] text-slate-500">ahora <CheckCheck size={14} className="text-sky-500" /></div>
+            </div>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-slate-500">
+              {phone ? 'Se abrirá WhatsApp con este mensaje listo; solo presiona enviar. Queda en el historial del cliente.' : 'Este cliente no tiene teléfono registrado. Puedes copiar el mensaje.'}
+            </p>
+            <button onClick={() => { touched.current = true; setEditing({ ...current, isNew: false }) }} className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline">
+              <Pencil size={12} /> Editar plantilla «{current.label}»
+            </button>
+          </div>
+        </>
+      )}
     </Modal>
   )
 }

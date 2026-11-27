@@ -1,17 +1,32 @@
 import { Injectable } from '@nestjs/common'
 import type { Tenant } from '../../common/auth/tenant.js'
+import { ApiError } from '../../common/errors/api-error.js'
 import * as M from '../../common/utils/mappers.js'
 import type { Temp } from '../../common/validation/schemas.js'
 import { AccessService } from '../../core/access.service.js'
 import { SupabaseService } from '../../core/supabase.service.js'
 import type { TablesInsert, TablesUpdate } from '../../database/database.types.js'
+import { fold } from '../imports/excel/normalize.js'
+import { ContactFilesService } from './contact-files.service.js'
 import type { ActivityBody, ContactListQuery, ContactPatch, CreateContactBody } from './contacts.schemas.js'
+
+/** Letra (ya pasada por fold) → clase de regex con sus variantes acentuadas */
+const LETTER_VARIANTS: Record<string, string> = {
+  A: '[aáàäâãÁÀÄÂÃ]',
+  E: '[eéèëêÉÈËÊ]',
+  I: '[iíìïîÍÌÏÎ]',
+  O: '[oóòöôõÓÒÖÔÕ]',
+  U: '[uúùüûÚÙÜÛ]',
+  N: '[nñÑ]',
+  C: '[cçÇ]',
+}
 
 @Injectable()
 export class ContactsService {
   constructor(
     private readonly sb: SupabaseService,
     private readonly access: AccessService,
+    private readonly files: ContactFilesService,
   ) {}
 
   async list(t: Tenant, f: ContactListQuery) {
@@ -55,6 +70,7 @@ export class ContactsService {
     const { note, ...fields } = b
     const owner = t.role === 'vendedor' ? t.actorId : (fields.owner ?? t.actorId)
     if (owner !== t.actorId) await this.access.seller(t, owner)
+    await this.assertUniqueName(t, fields.name)
     const row = await q(
       db
         .from('contacts')
@@ -72,6 +88,33 @@ export class ContactsService {
     return M.contact({ ...row, activities: [act] })
   }
 
+  /**
+   * No se permiten dos clientes/prospectos con el mismo nombre en la empresa.
+   * Se compara sin mayúsculas, tildes ni espacios sobrantes ("Juan  Pérez" = "juan perez").
+   */
+  private async assertUniqueName(t: Tenant, name: string, exceptId?: string) {
+    const key = fold(name)
+    if (!key) return
+    // Regex sin distinguir mayúsculas (~*): cada letra acepta sus variantes con tilde
+    // y los espacios cualquier secuencia; después se confirma con fold()
+    const pattern = `^\\s*${key
+      .split(' ')
+      .map((word) => [...word].map((ch) => LETTER_VARIANTS[ch] ?? ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(''))
+      .join('\\s+')}\\s*$`
+    let query = this.sb.db.from('contacts').select('id, name, owner_id').eq('company_id', t.companyId).filter('name', 'imatch', pattern)
+    if (exceptId) query = query.neq('id', exceptId)
+    const rows = await this.sb.q(query)
+    const dup = rows.find((r) => fold(r.name) === key)
+    if (!dup) return
+    const mine = !t.sellerId || dup.owner_id === t.sellerId
+    throw new ApiError(
+      409,
+      mine
+        ? `Ya tienes un cliente registrado con el nombre "${dup.name}"`
+        : `Ya existe un cliente con el nombre "${dup.name}", asignado a otro vendedor`,
+    )
+  }
+
   async update(t: Tenant, cid: string, sent: ContactPatch) {
     await this.access.contact(t, cid)
     const { db, q, one } = this.sb
@@ -79,6 +122,7 @@ export class ContactsService {
     // Reasignar el contacto es cosa del gerente
     if (t.role === 'vendedor') delete rest.owner
     else if (rest.owner) await this.access.seller(t, rest.owner)
+    if (rest.name) await this.assertUniqueName(t, rest.name, cid)
     // La temperatura también se propaga a los tratos abiertos
     if (temp) await this.sb.rpc('set_contact_temp', { p_contact_id: cid, p_temp: temp })
     const patch = M.toRow(rest, M.CONTACT_COLS) as TablesUpdate<'contacts'>
@@ -95,9 +139,24 @@ export class ContactsService {
   }
 
   /** Borra en cascada tratos, cuotas, actividades, tareas y alertas */
+  /**
+   * Borrar un contacto arrastra (on delete cascade) sus tratos, cuotas, pagos e historial.
+   * Por eso solo se permite si no tiene ventas cerradas ni cuotas: así no cambian los cobros ni las ventas del mes.
+   */
   async remove(t: Tenant, cid: string) {
     await this.access.contact(t, cid)
-    await this.sb.q(this.sb.db.from('contacts').delete().eq('id', cid))
+    const { db, q } = this.sb
+    const [payments, sold] = await Promise.all([
+      q(db.from('payments').select('id').eq('contact_id', cid).limit(1)),
+      q(db.from('deals').select('id').eq('contact_id', cid).eq('stage', 'cerrado').limit(1)),
+    ])
+    if (payments.length || sold.length) {
+      throw new ApiError(409, 'Este cliente tiene ventas o cobros registrados y no se puede eliminar. Pasa sus tratos abiertos a "Por ahora no".')
+    }
+    // Las filas de contact_files se borran en cascada; los PDF del bucket, aquí
+    const paths = await this.files.pathsOf(cid)
+    await q(db.from('contacts').delete().eq('id', cid))
+    await this.files.removeObjects(paths)
   }
 
   // --- Línea de tiempo ---

@@ -8,6 +8,7 @@ import { Avatar, Button, Card, Chip, Empty, Field, Flag, Logo, Modal, cx, inputC
 import { PersonFields, RoleBadge, StatusBadge, isEmail, mailNotice } from '../components/people'
 import { CredentialsCard, OnboardingBadge, OnboardingSwitch, TempPasswordField } from '../components/onboarding'
 import { passwordProblem } from '../auth/passwords'
+import { HelpButton } from '../components/Help'
 
 const PLANS = {
   basico: { name: 'Básico', seats: 5 },
@@ -79,6 +80,7 @@ export default function Admin() {
             <p className="text-[11px] text-slate-500">Panel de plataforma</p>
           </div>
           <div className="ml-auto flex items-center gap-3">
+            <HelpButton module="admin" role={user.role} basics={false} />
             <Avatar name={user.name} size="sm" />
             <span className="hidden text-sm font-medium text-slate-700 sm:inline">{user.name}</span>
             <button onClick={logout} aria-label="Cerrar sesión" title="Cerrar sesión" className="grid h-9 w-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100">

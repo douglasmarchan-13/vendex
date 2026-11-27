@@ -3,12 +3,14 @@ import { Link } from 'react-router'
 import { Sparkles, SquareKanban, Users, Target, Plus, ChevronDown, Check, Coins, RotateCcw, Globe, HandCoins, Bell, BellRing, UsersRound, LogOut } from 'lucide-react'
 import { useCobros } from '../views/Collections'
 import { dueText } from '../lib/cobranza'
+import { diffDays, fmtTime, rel } from '../lib/dates'
 import { useApp } from '../store'
 import { useAuth } from '../auth/AuthContext'
 import { ROLE_NAMES } from '../lib/session'
 import { COUNTRIES } from '../data/mock'
 import { CURRENCIES } from '../lib/money'
 import { Avatar, Button, Flag, Logo, cx } from './ui'
+import { HelpButton } from './Help'
 
 export const NAV = [
   { id: 'hoy', label: 'Hoy', long: 'Hoy · Mi Copiloto', icon: Sparkles },
@@ -199,7 +201,7 @@ export function SellerSwitch({ className }) {
 
 export function TopBar({ view }) {
   const { openModal } = useApp()
-  const { logout } = useAuth()
+  const { logout, user } = useAuth()
   const nav = NAV.find((n) => n.id === view)
   return (
     <header className="sticky top-0 z-20 border-b border-slate-200/70 bg-[#F8FAFC]/85 backdrop-blur-md">
@@ -216,6 +218,7 @@ export function TopBar({ view }) {
           <div className="hidden xl:block"><CountrySwitch /></div>
           <CurrencyMenu />
           <CobroBell />
+          <HelpButton module={view} role={user?.role} modules={navFor(user?.role).map((n) => n.id)} />
           <button onClick={logout} aria-label="Cerrar sesión" title="Cerrar sesión" className="grid h-10 w-10 place-items-center rounded-lg bg-white text-slate-600 ring-1 ring-inset ring-slate-200 hover:bg-slate-50 lg:hidden">
             <LogOut size={18} />
           </button>
@@ -264,10 +267,60 @@ export function MobileNav({ view }) {
   )
 }
 
-/* Campana: avisos de cobros vencidos, de hoy y próximos 2 días */
+/** Tareas pendientes atrasadas, de hoy y de mañana (las de mañana avisan que se acerca la fecha) */
+// eslint-disable-next-line react-refresh/only-export-components
+export function useTaskAlerts() {
+  const { data, contactById, inCountry } = useApp()
+  const pending = data.tasks
+    .filter((t) => !t.done && contactById[t.contactId] && inCountry(contactById[t.contactId].country))
+    .filter((t) => diffDays(t.at) <= 1)
+    .sort((a, b) => (a.at < b.at ? -1 : 1))
+  return { pending, urgent: pending.filter((t) => diffDays(t.at) <= 0) }
+}
+
+const REMIND_BEFORE_MS = 15 * 60000
+
+/**
+ * Aviso a la hora de cada tarea de hoy (y 15 minutos antes) mientras Vendex está abierto:
+ * un toast en la app y, si el navegador lo permite, una notificación del sistema.
+ */
+function useTaskReminders() {
+  const { data, contactById, toast } = useApp()
+  const fired = useRef(new Set())
+  useEffect(() => {
+    const now = Date.now()
+    const timers = []
+    for (const t of data.tasks) {
+      if (t.done) continue
+      const c = contactById[t.contactId]
+      const when = new Date(t.at).getTime()
+      for (const [offset, label] of [[REMIND_BEFORE_MS, 'En 15 minutos'], [0, 'Es la hora']]) {
+        const key = `${t.id}:${offset}`
+        const delay = when - offset - now
+        // Solo lo que cae en las próximas 24 h (setTimeout no admite plazos muy largos)
+        if (delay < 0 || delay > 86400000 || fired.current.has(key)) continue
+        timers.push(
+          setTimeout(() => {
+            fired.current.add(key)
+            const text = `${label}: ${t.title}${c ? ` · ${c.name}` : ''}`
+            toast(text, { tone: 'success' })
+            if ('Notification' in window && Notification.permission === 'granted') {
+              try { new Notification('Vendex · Seguimiento', { body: text, tag: key }) } catch { /* navegador sin soporte */ }
+            }
+          }, delay)
+        )
+      }
+    }
+    return () => timers.forEach(clearTimeout)
+  }, [data.tasks, contactById, toast])
+}
+
+/* Campana: cobros (vencidos, de hoy y próximos 2 días) y seguimientos (atrasados, de hoy y de mañana) */
 export function CobroBell() {
-  const { contactById, data, money, openModal, isSnoozed } = useApp()
+  const { contactById, data, money, openModal, isSnoozed, openContact, toggleTask } = useApp()
   const cob = useCobros()
+  const tasks = useTaskAlerts()
+  useTaskReminders()
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
   useEffect(() => {
@@ -277,16 +330,20 @@ export function CobroBell() {
   }, [])
   const soon = cob.week.filter((p) => new Date(p.dueAt) - new Date() < 3 * 86400000)
   const items = [...cob.overdue, ...cob.today, ...soon].sort((a, b) => (a.dueAt < b.dueAt ? -1 : 1))
-  const urgent = cob.overdue.length + cob.today.length
-  const fresh = items.filter((p) => !isSnoozed(`cobro-${p.id}`)).length
+  const urgent = cob.overdue.length + cob.today.length + tasks.urgent.length
+  const fresh = items.filter((p) => !isSnoozed(`cobro-${p.id}`)).length + tasks.urgent.length
   const I = urgent ? BellRing : Bell
   const product = (p) => data.deals.find((d) => d.id === p.dealId)?.product
+  const taskWhen = (t) => {
+    const dd = diffDays(t.at)
+    return dd < 0 ? `Atrasada · ${rel(t.at)}` : `${dd === 0 ? 'Hoy' : 'Mañana'} a las ${fmtTime(t.at)}`
+  }
 
   return (
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen((o) => !o)}
-        aria-label={`Avisos de cobranza: ${urgent}`}
+        aria-label={`Avisos: ${urgent}`}
         className="relative grid h-10 w-10 place-items-center rounded-lg bg-white text-slate-600 ring-1 ring-inset ring-slate-200 hover:bg-slate-50"
       >
         <I size={18} className={urgent ? 'text-rose-600' : ''} />
@@ -296,14 +353,44 @@ export function CobroBell() {
       </button>
       {open && (
         <div className="anim-up absolute right-0 z-40 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-xl border border-slate-200 bg-white shadow-xl">
+          <div className="max-h-[70vh] overflow-y-auto">
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-            <p className="font-semibold text-slate-900">Avisos de cobranza</p>
+            <p className="font-semibold text-slate-900">Seguimientos</p>
+            <Link to="/hoy" onClick={() => setOpen(false)} className="text-xs font-medium text-indigo-600">Ver agenda</Link>
+          </div>
+          {tasks.pending.length === 0 ? (
+            <p className="px-4 py-4 text-center text-sm text-slate-500">No tienes contactos pendientes para hoy ni mañana.</p>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {tasks.pending.map((t) => {
+                const k = contactById[t.contactId]
+                const dd = diffDays(t.at)
+                return (
+                  <li key={t.id} className="flex items-start gap-2 px-4 py-3 hover:bg-slate-50">
+                    <button onClick={() => { setOpen(false); openContact(k.id) }} className="flex min-w-0 flex-1 items-start gap-3 text-left">
+                      <span className={cx('mt-1.5 h-2 w-2 shrink-0 rounded-full', dd < 0 ? 'bg-rose-500' : dd === 0 ? 'bg-amber-500' : 'bg-indigo-400')} />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1.5 text-sm font-medium text-slate-800"><Flag code={k.country} className="h-2.5 w-[15px]" /> <span className="truncate">{k.name}</span></span>
+                        <span className="block truncate text-xs text-slate-500">{t.title}</span>
+                        <span className={cx('text-xs font-medium', dd < 0 ? 'text-rose-600' : dd === 0 ? 'text-amber-700' : 'text-indigo-600')}>{taskWhen(t)}</span>
+                      </span>
+                    </button>
+                    <button onClick={() => toggleTask(t.id)} title="Marcar como hecha" aria-label="Marcar como hecha" className="grid h-7 w-7 shrink-0 place-items-center rounded-md border-2 border-slate-300 text-transparent hover:border-emerald-500 hover:text-emerald-500">
+                      <Check size={14} strokeWidth={3} />
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+          <div className="flex items-center justify-between border-y border-slate-100 px-4 py-3">
+            <p className="font-semibold text-slate-900">Cobranza</p>
             <Link to="/cobranza" onClick={() => setOpen(false)} className="text-xs font-medium text-indigo-600">Ver todo</Link>
           </div>
           {items.length === 0 ? (
-            <p className="px-4 py-6 text-center text-sm text-slate-500">No hay cobros pendientes para los próximos días.</p>
+            <p className="px-4 py-4 text-center text-sm text-slate-500">No hay cobros pendientes para los próximos días.</p>
           ) : (
-            <ul className="max-h-80 divide-y divide-slate-100 overflow-y-auto">
+            <ul className="divide-y divide-slate-100">
               {items.map((p) => {
                 const k = contactById[p.contactId]
                 return (
@@ -322,6 +409,7 @@ export function CobroBell() {
               })}
             </ul>
           )}
+          </div>
         </div>
       )}
     </div>

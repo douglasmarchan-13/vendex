@@ -48,7 +48,26 @@ export class ImportsController {
     return this.imports.commit(wholeCompany(t), file, parseCommitOptions(options))
   }
 
-  /** Deshace una importación: borra los contactos, tratos y notas que creó */
+  /** Excel de deudas por cobrar: devuelve las ventas y cuotas que se crearían, sin guardar nada */
+  @Post('debts/preview')
+  @HttpCode(200)
+  @UseInterceptors(upload)
+  @ApiConsumes('multipart/form-data')
+  @ApiBody(fileBody)
+  previewDebts(@CurrentTenant() t: Tenant, @UploadedFile() file: UploadedXlsx | undefined) {
+    return this.imports.previewDebts(wholeCompany(t), file)
+  }
+
+  /** Importa las deudas: una venta cerrada por fila con sus cuotas en Cobranza ("options": { exclude }) */
+  @Post('debts')
+  @UseInterceptors(upload)
+  @ApiConsumes('multipart/form-data')
+  @ApiBody(fileBody)
+  commitDebts(@CurrentTenant() t: Tenant, @UploadedFile() file: UploadedXlsx | undefined, @Body('options') options: unknown) {
+    return this.imports.commitDebts(wholeCompany(t), file, parseCommitOptions(options))
+  }
+
+  /** Deshace una importación: borra los contactos, tratos, cuotas y notas que creó */
   @Post(':id/undo')
   @HttpCode(200)
   undo(@CurrentTenant() t: Tenant, @ZParam('id', z.uuid()) id: string) {

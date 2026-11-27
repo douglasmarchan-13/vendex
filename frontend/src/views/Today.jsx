@@ -9,7 +9,7 @@ import { useAuth } from '../auth/AuthContext'
 import { useCobros } from './Collections'
 import { COUNTRIES, GOAL_SHARE } from '../data/mock'
 import { Avatar, Button, Card, Empty, Field, Flag, Progress, cx, inputCls } from '../components/ui'
-import { diffDays, fmtTime, startOfMonth, todayLong, at } from '../lib/dates'
+import { diffDays, fmtTime, rel, startOfMonth, todayLong, at } from '../lib/dates'
 
 const ALERT_UI = {
   hot: { icon: Flame, cls: 'bg-rose-50 text-rose-600', tag: 'Oportunidad' },
@@ -53,6 +53,11 @@ export default function Today() {
     .filter((t) => diffDays(t.at) === 0 || (diffDays(t.at) < 0 && !t.done))
     .sort((a, b) => (a.at < b.at ? -1 : 1))
   const todays = tasks.filter((t) => diffDays(t.at) === 0)
+  // Tareas de los próximos 7 días (p. ej. el próximo contacto agendado al crear un cliente)
+  const upcoming = data.tasks
+    .filter((t) => !t.done && inCountry(contactById[t.contactId]?.country))
+    .filter((t) => diffDays(t.at) >= 1 && diffDays(t.at) <= 7)
+    .sort((a, b) => (a.at < b.at ? -1 : 1))
   const doneCount = todays.filter((t) => t.done).length
   // Avisos de cobranza: vencidos, de hoy y de los próximos 2 días (se generan solos desde el plan de cobro)
   const cob = useCobros()
@@ -173,7 +178,7 @@ export default function Today() {
         </Card>
 
         {/* Agenda */}
-        <Agenda tasks={tasks} late={late} money={money} className="lg:col-span-2" />
+        <Agenda tasks={tasks} upcoming={upcoming} late={late} money={money} className="lg:col-span-2" />
       </div>
     </div>
   )
@@ -225,7 +230,7 @@ function AlertRow({ a }) {
   )
 }
 
-function Agenda({ tasks, late, className }) {
+function Agenda({ tasks, upcoming = [], late, className }) {
   const { data, contactById, toggleTask, openContact, addTask, inCountry } = useApp()
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState({ time: '12:00', contactId: '', title: '', type: 'llamada' })
@@ -314,6 +319,29 @@ function Agenda({ tasks, late, className }) {
             )
           })}
         </ul>
+      )}
+
+      {upcoming.length > 0 && (
+        <div className="border-t border-slate-100 px-5 py-4">
+          <h4 className="text-xs font-semibold text-slate-400">Próximos días</h4>
+          <ul className="mt-2 space-y-2">
+            {upcoming.map((t) => {
+              const c = contactById[t.contactId]
+              const I = TASK_ICONS[t.type] || Phone
+              return (
+                <li key={t.id}>
+                  <button onClick={() => openContact(c.id)} className="flex w-full items-start gap-3 rounded-lg text-left hover:bg-slate-50">
+                    <span className="w-20 shrink-0 text-xs font-semibold text-indigo-600">{rel(t.at)} · {fmtTime(t.at)}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5 text-sm text-slate-800"><I size={13} className="shrink-0 text-slate-400" /> <span className="truncate">{t.title}</span></span>
+                      <span className="block truncate text-xs text-slate-500">{c.name}</span>
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
       )}
     </Card>
   )

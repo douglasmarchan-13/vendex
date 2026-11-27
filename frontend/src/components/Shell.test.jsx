@@ -6,7 +6,11 @@ import { Sidebar, TopBar } from './Shell'
 vi.mock('../store', () => ({
   useApp: () => ({
     openModal: () => {},
-    data: { contacts: [], deals: [], payments: [], rates: { USD: 1 } },
+    data: { contacts: [], deals: [], payments: [], tasks: [], rates: { USD: 1 } },
+    inCountry: () => true,
+    toast: () => {},
+    openContact: () => {},
+    toggleTask: () => {},
     sellers: { andres: { id: 'andres', name: 'Andrés Ramírez', active: true } },
     canManage: true,
     sellerFilter: 'ALL',

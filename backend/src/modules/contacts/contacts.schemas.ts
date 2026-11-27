@@ -34,7 +34,15 @@ export const activityBody = z.object({
   at: isoDate.optional(),
 })
 
-export type ContactBody = z.output<typeof contactBody>
+/** Campos de texto que acompañan al PDF (multipart/form-data: todo llega como string) */
+export const contactFileBody = z.object({
+  dealId: z.preprocess((v) => (v === '' ? undefined : v), id.optional()),
+  kind: z.enum(['cotizacion', 'otro']).default('cotizacion'),
+  note: z.string().trim().max(500).default(''),
+})
+
+export type ContactFileBody = z.output<typeof contactFileBody>
+export type ContactBody =z.output<typeof contactBody>
 export type CreateContactBody = z.output<typeof createContactBody>
 export type ContactPatch = z.output<typeof contactPatch>
 export type ContactListQuery = z.output<typeof contactListQuery>

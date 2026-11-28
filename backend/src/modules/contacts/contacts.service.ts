@@ -89,11 +89,22 @@ export class ContactsService {
       b.name ? this.findSameName(t, b.name, b.exceptId) : Promise.resolve([]),
       b.doc && b.country ? this.findSameDoc(t, b.country, b.doc, b.exceptId) : Promise.resolve(null),
     ])
-    const mine = (r: { owner_id: string | null }) => !t.sellerId || r.owner_id === t.sellerId
+    const sellers = await this.sellerNames(t, [...sameName.map((r) => r.owner_id), doc?.owner_id ?? null])
+    // mine: es del vendedor que consulta; seller: nombre del vendedor dueño del cliente
+    const mine = (r: { owner_id: string | null }) => r.owner_id === t.actorId
+    const seller = (r: { owner_id: string | null }) => (r.owner_id ? (sellers.get(r.owner_id) ?? null) : null)
     return {
-      sameName: sameName.map((r) => ({ name: r.name, mine: mine(r) })),
-      docTaken: doc ? { name: mine(doc) ? doc.name : null, doc: doc.doc, mine: mine(doc) } : null,
+      sameName: sameName.map((r) => ({ name: r.name, mine: mine(r), seller: seller(r) })),
+      docTaken: doc ? { name: doc.name, doc: doc.doc, mine: mine(doc), seller: seller(doc) } : null,
     }
+  }
+
+  /** id del vendedor → nombre, solo de la empresa de la sesión */
+  private async sellerNames(t: Tenant, ids: (string | null)[]) {
+    const unique = [...new Set(ids.filter((x): x is string => !!x))]
+    if (!unique.length) return new Map<string, string>()
+    const rows = await this.sb.q(this.sb.db.from('sellers').select('id, name').eq('company_id', t.companyId).in('id', unique))
+    return new Map(rows.map((r) => [r.id, r.name]))
   }
 
   /** Clientes de la empresa con el mismo nombre (sin distinguir mayúsculas ni espacios sobrantes) */
@@ -127,14 +138,12 @@ export class ContactsService {
   private async assertUniqueDoc(t: Tenant, country: string, doc: string, exceptId?: string) {
     const dup = await this.findSameDoc(t, country, doc, exceptId)
     if (!dup) return
-    const mine = !t.sellerId || dup.owner_id === t.sellerId
-    throw new ApiError(
-      409,
-      mine
-        ? `El documento ${dup.doc} ya está registrado para el cliente "${dup.name}"`
-        : `El documento ${dup.doc} ya está registrado para un cliente de otro vendedor`,
-      { code: 'duplicate_doc' },
-    )
+    const seller = dup.owner_id ? (await this.sellerNames(t, [dup.owner_id])).get(dup.owner_id) : undefined
+    const whose = dup.owner_id === t.actorId ? 'tu cliente' : seller ? `el cliente de ${seller}` : 'el cliente'
+    throw new ApiError(409, `El documento ${dup.doc} ya está registrado para ${whose} "${dup.name}"`, {
+      code: 'duplicate_doc',
+      seller: seller ?? null,
+    })
   }
 
   async update(t: Tenant, cid: string, sent: ContactPatch) {

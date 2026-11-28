@@ -50,17 +50,18 @@ const docKey = (s) => (s || '').toUpperCase().replace(/[^0-9A-Z]/g, '')
  * Con los datos en pantalla se avisa al escribir; al guardar se consulta al servidor (ve también los clientes de otros vendedores).
  */
 function useContactCheck(contacts, { name, country, doc, exceptId, checkName = true, checkDoc = true }) {
+  const { sellers } = useApp()
+  const { user } = useAuth()
   const [state, setState] = useState({ checking: false, docTaken: null, sameName: null })
   const localName = checkName && nameKey(name) ? contacts.find((x) => x.id !== exceptId && nameKey(x.name) === nameKey(name)) : null
   const localDoc = checkDoc && docKey(doc) ? contacts.find((x) => x.id !== exceptId && x.country === country && docKey(x.doc) === docKey(doc)) : null
   // Al cambiar lo escrito, se olvida lo que respondió el servidor
   useEffect(() => setState((s) => (s.docTaken || s.sameName ? { checking: false, docTaken: null, sameName: null } : s)), [name, country, doc])
 
-  const docError = localDoc
-    ? `Este documento ya está registrado para ${localDoc.name}.`
-    : state.docTaken
-      ? `Este documento ya está registrado${state.docTaken.mine && state.docTaken.name ? ` para ${state.docTaken.name}` : ' para un cliente de otro vendedor'}.`
-      : ''
+  /** Un contacto de los datos en pantalla, con la misma forma que responde el servidor */
+  const asHit = (x) => ({ name: x.name, doc: x.doc, mine: x.owner === user?.sellerId, seller: sellers?.[x.owner]?.name ?? null })
+  const docHit = state.docTaken ?? (localDoc ? asHit(localDoc) : null)
+  const docError = docHit ? `Este documento ya está registrado para ${whose(docHit)} "${docHit.name}".` : ''
 
   /** Devuelve 'ok' | 'doc' (bloquea) | 'name' (pedir confirmación) */
   const run = async () => {
@@ -82,18 +83,19 @@ function useContactCheck(contacts, { name, country, doc, exceptId, checkName = t
     }
   }
 
-  const sameNames = state.sameName ?? (localName ? [{ name: localName.name, mine: true }] : [])
-  return { checking: state.checking, localName, docError, sameNames, run }
+  const sameNames = state.sameName ?? (localName ? [asHit(localName)] : [])
+  return { checking: state.checking, localName, localNameHit: localName ? asHit(localName) : null, docError, sameNames, run }
 }
 
-/** Aviso al confirmar un nombre repetido */
+/** "tu cliente" / "el cliente de Andrés Ruiz" */
+const whose = (hit) => (hit.mine ? 'tu cliente' : hit.seller ? `el cliente de ${hit.seller}` : 'el cliente de otro vendedor')
+
+/** Aviso al confirmar un nombre repetido: dice qué vendedor(es) lo tienen */
 const sameNameText = (list) => {
-  const mine = list.filter((x) => x.mine).length
-  const others = list.length - mine
-  const parts = []
-  if (mine) parts.push(mine === 1 ? 'ya tienes un cliente' : `ya tienes ${mine} clientes`)
-  if (others) parts.push(others === 1 ? 'otro vendedor tiene uno' : `otros vendedores tienen ${others}`)
-  return `${parts.join(' y ')} con el nombre "${list[0].name}". ¿Quieres continuar de todos modos?`.replace(/^./, (c) => c.toUpperCase())
+  const owners = [...new Set(list.map((x) => (x.mine ? 'ti' : x.seller || 'otro vendedor')))]
+  const who = owners.length > 1 ? `${owners.slice(0, -1).join(', ')} y ${owners.at(-1)}` : owners[0]
+  const what = list.length === 1 ? 'un cliente' : `${list.length} clientes`
+  return `Ya existe ${what} con el nombre "${list[0].name}" registrado por ${who}. ¿Quieres continuar de todos modos?`
 }
 
 function DealModal({ onClose, contactId }) {
@@ -206,7 +208,7 @@ function DealModal({ onClose, contactId }) {
                     <input className={cx(inputCls, duplicate && 'border-amber-400 focus:border-amber-500 focus:ring-amber-200')} value={f.name} onChange={set('name')} placeholder="Ej. Juan Pérez Flores" required />
                     {duplicate && (
                       <span className="mt-1 block text-xs text-amber-700">
-                        Ya tienes un cliente con ese nombre ({duplicate.name}). Puedes continuar si es otra persona.{' '}
+                        Ya existe {whose(check.localNameHit)} con ese nombre ({duplicate.name}). Puedes continuar si es otra persona.{' '}
                         {inCountry(duplicate.country) && <button type="button" className="font-medium underline" onClick={() => { setMode('existente'); setF((x) => ({ ...x, contactId: duplicate.id })) }}>
                           Usar el existente
                         </button>}
@@ -397,7 +399,7 @@ function ContactModal({ onClose, contactId }) {
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Nombre del cliente *">
             <input className={cx(inputCls, duplicate && 'border-amber-400 focus:border-amber-500 focus:ring-amber-200')} value={f.name} onChange={set('name')} required />
-            {duplicate && <span className="mt-1 block text-xs text-amber-700">Ya existe otro cliente con ese nombre ({duplicate.name}). Puedes continuar si es otra persona.</span>}
+            {duplicate && <span className="mt-1 block text-xs text-amber-700">Ya existe {whose(check.localNameHit)} con ese nombre ({duplicate.name}). Puedes continuar si es otra persona.</span>}
           </Field>
           <Field label="Empresa"><input className={inputCls} value={f.company} onChange={set('company')} placeholder="Opcional" /></Field>
           <Field label="Teléfono">

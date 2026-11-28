@@ -16,7 +16,7 @@ const isTimeZone = (tz: string) => {
   }
 }
 
-const envSchema = (isProd: boolean) =>
+const envSchema = (isProd: boolean, isTest = false) =>
   z
     .object({
       PORT: z.coerce.number().int().positive().default(4000),
@@ -39,6 +39,9 @@ const envSchema = (isProd: boolean) =>
       MAIL_DRIVER: z.enum(['console', 'resend']).default('console'),
       RESEND_API_KEY: z.string().optional(),
       MAIL_FROM: z.string().default('Vendex <no-reply@localhost>'),
+      // Tipo de cambio oficial (BCV, BCRP, BCB): se consulta al arrancar y cada RATES_SYNC_HOURS horas
+      RATES_AUTO_SYNC: bool(!isTest),
+      RATES_SYNC_HOURS: z.coerce.number().min(0.25).max(48).default(3),
     })
     .superRefine((e, ctx) => {
       if ((e.REQUIRE_AUTH || isProd) && (e.JWT_SECRET ?? '').length < 32) {
@@ -74,6 +77,9 @@ export class AppConfig {
   readonly mailDriver: 'console' | 'resend'
   readonly resendApiKey: string
   readonly mailFrom: string
+  /** Trae el tipo de cambio de los bancos centrales en segundo plano (desactivado en pruebas) */
+  readonly ratesAutoSync: boolean
+  readonly ratesSyncHours: number
 
   private constructor(env: Env, isProduction: boolean) {
     this.isProduction = isProduction
@@ -92,11 +98,13 @@ export class AppConfig {
     this.mailDriver = env.MAIL_DRIVER
     this.resendApiKey = env.RESEND_API_KEY ?? ''
     this.mailFrom = env.MAIL_FROM
+    this.ratesAutoSync = env.RATES_AUTO_SYNC
+    this.ratesSyncHours = env.RATES_SYNC_HOURS
   }
 
   static fromEnv(env: NodeJS.ProcessEnv = process.env): AppConfig {
     const isProd = env.NODE_ENV === 'production'
-    const r = envSchema(isProd).safeParse(env)
+    const r = envSchema(isProd, env.NODE_ENV === 'test').safeParse(env)
     if (!r.success) {
       const lines = r.error.issues.map((i) => `  · ${i.path.join('.')}: ${i.message}`).join('\n')
       throw new Error(`Configuración no válida. Copia .env.example a .env y complétalo:\n${lines}`)

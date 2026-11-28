@@ -19,6 +19,15 @@ export const createContactBody = contactBody.extend({ note: z.string().trim().ma
 /** Edición: se usa con `onlySent`, así los valores por defecto no pisan campos no enviados */
 export const contactPatch = contactBody.partial()
 
+/** Validación previa al guardar: nombre repetido (advertencia) y documento repetido (bloquea) */
+export const contactCheckBody = z.object({
+  name: z.string().trim().max(200).optional(),
+  country: country.optional(),
+  doc: z.string().trim().max(40).optional(),
+  /** Al editar: el propio contacto no cuenta como repetido */
+  exceptId: id.optional(),
+})
+
 export const contactListQuery = z.object({
   country: country.optional(),
   owner: id.optional(),
@@ -46,5 +55,6 @@ export type ContactBody =z.output<typeof contactBody>
 export type CreateContactBody = z.output<typeof createContactBody>
 export type ContactPatch = z.output<typeof contactPatch>
 export type ContactListQuery = z.output<typeof contactListQuery>
+export type ContactCheckBody = z.output<typeof contactCheckBody>
 export type TempBody = z.output<typeof tempBody>
 export type ActivityBody = z.output<typeof activityBody>

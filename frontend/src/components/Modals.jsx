@@ -38,8 +38,63 @@ const laterToday = (time) => {
   return `${String(Math.min(23, now.getHours() + 1)).padStart(2, '0')}:00`
 }
 const TASK_TYPES = [['llamada', 'Llamada'], ['whatsapp', 'WhatsApp'], ['visita', 'Visita de campo'], ['reunion', 'Reunión']]
-/** Igual que en el servidor: sin mayúsculas, tildes ni espacios sobrantes */
-const nameKey = (s) => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/\s+/g, ' ').trim()
+/** Igual que en el servidor: sin mayúsculas ni espacios sobrantes (las tildes cuentan) */
+const nameKey = (s) => (s || '').trim().replace(/\s+/g, ' ').toLocaleUpperCase('es')
+/** Igual que en el servidor: el documento oficial solo con letras y números ("J-1234.567-8" = "j12345678") */
+const docKey = (s) => (s || '').toUpperCase().replace(/[^0-9A-Z]/g, '')
+
+/**
+ * Validación de cliente al guardar:
+ * - mismo nombre → advertencia; el usuario confirma y se guarda igual;
+ * - mismo documento oficial en el país (DNI, RUC, cédula…) → no se puede guardar.
+ * Con los datos en pantalla se avisa al escribir; al guardar se consulta al servidor (ve también los clientes de otros vendedores).
+ */
+function useContactCheck(contacts, { name, country, doc, exceptId, checkName = true, checkDoc = true }) {
+  const [state, setState] = useState({ checking: false, docTaken: null, sameName: null })
+  const localName = checkName && nameKey(name) ? contacts.find((x) => x.id !== exceptId && nameKey(x.name) === nameKey(name)) : null
+  const localDoc = checkDoc && docKey(doc) ? contacts.find((x) => x.id !== exceptId && x.country === country && docKey(x.doc) === docKey(doc)) : null
+  // Al cambiar lo escrito, se olvida lo que respondió el servidor
+  useEffect(() => setState((s) => (s.docTaken || s.sameName ? { checking: false, docTaken: null, sameName: null } : s)), [name, country, doc])
+
+  const docError = localDoc
+    ? `Este documento ya está registrado para ${localDoc.name}.`
+    : state.docTaken
+      ? `Este documento ya está registrado${state.docTaken.mine && state.docTaken.name ? ` para ${state.docTaken.name}` : ' para un cliente de otro vendedor'}.`
+      : ''
+
+  /** Devuelve 'ok' | 'doc' (bloquea) | 'name' (pedir confirmación) */
+  const run = async () => {
+    setState((s) => ({ ...s, checking: true }))
+    try {
+      const r = await endpoints.checkContact({
+        name: checkName ? name.trim() || undefined : undefined,
+        country: checkDoc && docKey(doc) ? country : undefined,
+        doc: checkDoc && docKey(doc) ? doc.trim() : undefined,
+        exceptId,
+      })
+      setState({ checking: false, docTaken: r.docTaken, sameName: r.sameName?.length ? r.sameName : null })
+      if (r.docTaken) return 'doc'
+      return r.sameName?.length ? 'name' : 'ok'
+    } catch {
+      // Sin respuesta: se sigue con lo que se sabe en pantalla; el servidor igual rechaza un documento repetido
+      setState((s) => ({ ...s, checking: false }))
+      return localDoc ? 'doc' : localName ? 'name' : 'ok'
+    }
+  }
+
+  const sameNames = state.sameName ?? (localName ? [{ name: localName.name, mine: true }] : [])
+  return { checking: state.checking, localName, docError, sameNames, run }
+}
+
+/** Aviso al confirmar un nombre repetido */
+const sameNameText = (list) => {
+  const mine = list.filter((x) => x.mine).length
+  const others = list.length - mine
+  const parts = []
+  if (mine) parts.push(mine === 1 ? 'ya tienes un cliente' : `ya tienes ${mine} clientes`)
+  if (others) parts.push(others === 1 ? 'otro vendedor tiene uno' : `otros vendedores tienen ${others}`)
+  return `${parts.join(' y ')} con el nombre "${list[0].name}". ¿Quieres continuar de todos modos?`.replace(/^./, (c) => c.toUpperCase())
+}
 
 function DealModal({ onClose, contactId }) {
   const { data, addDeal, contactById, country: activeCountry, inCountry, catalogs } = useApp()
@@ -61,22 +116,49 @@ function DealModal({ onClose, contactId }) {
   }
   const pickCountry = (c) => setF((x) => ({ ...x, country: c, currency: COUNTRIES[c].display }))
   const existing = data.contacts.filter((c) => inCountry(c.country))
-  const duplicate = mode === 'nuevo' && nameKey(f.name) ? data.contacts.find((c) => nameKey(c.name) === nameKey(f.name)) : null
+  const isNew = mode === 'nuevo'
+  const check = useContactCheck(data.contacts, { name: f.name, country: f.country, doc: f.doc, checkName: isNew, checkDoc: isNew })
+  const duplicate = check.localName
+  const [confirmDup, setConfirmDup] = useState(false)
+  useEffect(() => setConfirmDup(false), [f.name, f.doc, f.country, mode])
   // Próximo contacto: un atajo (hoy, mañana…) o una fecha elegida, siempre con hora
   const custom = f.nextDays === 'custom'
   const [hh, mm] = (f.nextTime || '09:00').split(':').map(Number)
   const nextAt = custom ? (f.nextDate ? new Date(`${f.nextDate}T${f.nextTime || '09:00'}`).toISOString() : '') : at(f.nextDays, hh, mm)
   const pastNext = nextAt && new Date(nextAt) < new Date(Date.now() - 60000)
-  const valid = f.product.trim() && (mode === 'nuevo' ? f.name.trim() && !duplicate : f.contactId) && nextAt && !pastNext
+  const valid = f.product.trim() && (isNew ? f.name.trim() && !check.docError : f.contactId) && nextAt && !pastNext
 
-  const submit = (e) => {
-    e.preventDefault()
-    if (!valid) return
+  const save = () => {
     const c = mode === 'existente' ? contactById[f.contactId] : null
-    if (f.makeTask && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {})
     addDeal({ ...f, contactId: mode === 'existente' ? f.contactId : '', country: c?.country || f.country, nextAt, task: f.makeTask ? f.taskType : null })
     onClose()
   }
+
+  const submit = async (e) => {
+    e.preventDefault()
+    if (!valid || check.checking) return
+    // Se pide aquí, mientras dura el clic del usuario
+    if (f.makeTask && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {})
+    if (isNew) {
+      const r = await check.run()
+      if (r === 'doc') return
+      if (r === 'name') return setConfirmDup(true)
+    }
+    save()
+  }
+
+  const footer = confirmDup ? (
+    <>
+      <p className="mr-auto self-center text-sm text-amber-800">{sameNameText(check.sameNames)}</p>
+      <Button variant="ghost" onClick={() => setConfirmDup(false)}>No, volver</Button>
+      <Button variant="primary" onClick={save}>Sí, continuar</Button>
+    </>
+  ) : (
+    <>
+      <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+      <Button variant="primary" type="submit" form="deal-form" disabled={!valid || check.checking}>{check.checking ? 'Revisando…' : 'Agregar al embudo'}</Button>
+    </>
+  )
 
   return (
     <Modal
@@ -85,7 +167,7 @@ function DealModal({ onClose, contactId }) {
       wide
       title="Nuevo trato"
       subtitle="Registra una oportunidad en menos de 30 segundos"
-      footer={<><Button variant="ghost" onClick={onClose}>Cancelar</Button><Button variant="primary" type="submit" form="deal-form" disabled={!valid}>Agregar al embudo</Button></>}
+      footer={footer}
     >
       <form id="deal-form" onSubmit={submit} className="space-y-5">
         {fixed ? (
@@ -121,10 +203,10 @@ function DealModal({ onClose, contactId }) {
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Nombre del cliente *">
-                    <input className={cx(inputCls, duplicate && 'border-rose-400 focus:border-rose-500 focus:ring-rose-200')} value={f.name} onChange={set('name')} placeholder="Ej. Juan Pérez Flores" required aria-invalid={!!duplicate} />
+                    <input className={cx(inputCls, duplicate && 'border-amber-400 focus:border-amber-500 focus:ring-amber-200')} value={f.name} onChange={set('name')} placeholder="Ej. Juan Pérez Flores" required />
                     {duplicate && (
-                      <span className="mt-1 block text-xs text-rose-600">
-                        Ya tienes un cliente con ese nombre ({duplicate.name}).{' '}
+                      <span className="mt-1 block text-xs text-amber-700">
+                        Ya tienes un cliente con ese nombre ({duplicate.name}). Puedes continuar si es otra persona.{' '}
                         {inCountry(duplicate.country) && <button type="button" className="font-medium underline" onClick={() => { setMode('existente'); setF((x) => ({ ...x, contactId: duplicate.id })) }}>
                           Usar el existente
                         </button>}
@@ -138,7 +220,10 @@ function DealModal({ onClose, contactId }) {
                       <input className={cx(inputCls, 'rounded-l-none')} inputMode="tel" value={f.phone} onChange={set('phone')} placeholder="999 999 999" />
                     </div>
                   </Field>
-                  <Field label={COUNTRIES[f.country].doc}><input className={inputCls} value={f.doc} onChange={set('doc')} placeholder="Opcional" /></Field>
+                  <Field label={COUNTRIES[f.country].doc}>
+                    <input className={cx(inputCls, check.docError && 'border-rose-400 focus:border-rose-500 focus:ring-rose-200')} value={f.doc} onChange={set('doc')} placeholder="Opcional" aria-invalid={!!check.docError} />
+                    {check.docError && <span className="mt-1 block text-xs text-rose-600">{check.docError}</span>}
+                  </Field>
                   <Field label="Ciudad / localidad"><input className={inputCls} value={f.city} onChange={set('city')} placeholder="Ej. Chiclayo" /></Field>
                   <Field label="¿Cómo llegó?">
                     <select className={inputCls} value={f.channel} onChange={set('channel')}>{CHANNELS.map((c) => <option key={c}>{c}</option>)}</select>
@@ -234,12 +319,20 @@ function ContactModal({ onClose, contactId }) {
   const c = contactById[contactId]
   const [f, setF] = useState(() => Object.fromEntries(CONTACT_FIELDS.map((k) => [k, c?.[k] ?? ''])))
   const [confirming, setConfirming] = useState(false)
+  const [confirmDup, setConfirmDup] = useState(false)
+  // Solo se revisa lo que cambió: el nombre, o el documento / país
+  const check = useContactCheck(data.contacts, {
+    name: f.name, country: f.country, doc: f.doc, exceptId: contactId,
+    checkName: nameKey(f.name) !== nameKey(c?.name),
+    checkDoc: docKey(f.doc) !== docKey(c?.doc) || f.country !== c?.country,
+  })
+  useEffect(() => setConfirmDup(false), [f.name, f.doc, f.country])
   if (!c) return null
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }))
 
-  const duplicate = nameKey(f.name) && nameKey(f.name) !== nameKey(c.name) ? data.contacts.find((x) => x.id !== c.id && nameKey(x.name) === nameKey(f.name)) : null
+  const duplicate = check.localName
   const badEmail = f.email.trim() !== '' && !EMAIL_RE.test(f.email.trim())
-  const valid = f.name.trim() && !duplicate && !badEmail
+  const valid = f.name.trim() && !check.docError && !badEmail
   const channels = c.channel && !CHANNELS.includes(c.channel) ? [c.channel, ...CHANNELS] : CHANNELS
 
   // Se borra solo si no hay ventas ni cobros: borrar arrastraría tratos, cuotas e historial
@@ -247,9 +340,7 @@ function ContactModal({ onClose, contactId }) {
   const pays = data.payments.filter((p) => p.contactId === c.id)
   const blocked = pays.length > 0 || deals.some((d) => d.stage === 'cerrado')
 
-  const save = (e) => {
-    e.preventDefault()
-    if (!valid) return
+  const commit = () => {
     const patch = {}
     for (const k of CONTACT_FIELDS) {
       const v = k === 'channel' ? f[k] || null : String(f[k]).trim()
@@ -259,7 +350,22 @@ function ContactModal({ onClose, contactId }) {
     onClose()
   }
 
-  const footer = confirming ? (
+  const save = async (e) => {
+    e.preventDefault()
+    if (!valid || check.checking) return
+    const r = await check.run()
+    if (r === 'doc') return
+    if (r === 'name') return setConfirmDup(true)
+    commit()
+  }
+
+  const footer = confirmDup ? (
+    <>
+      <p className="mr-auto self-center text-sm text-amber-800">{sameNameText(check.sameNames)}</p>
+      <Button variant="ghost" onClick={() => setConfirmDup(false)}>No, volver</Button>
+      <Button variant="primary" onClick={commit}>Sí, continuar</Button>
+    </>
+  ) : confirming ? (
     <>
       <p className="mr-auto self-center text-sm text-rose-700">¿Eliminar a {c.name}{deals.length ? ` y ${deals.length} trato${deals.length > 1 ? 's' : ''}` : ''}?</p>
       <Button variant="ghost" onClick={() => setConfirming(false)}>No, volver</Button>
@@ -271,7 +377,7 @@ function ContactModal({ onClose, contactId }) {
         <Trash2 size={15} /> Eliminar cliente
       </Button>
       <Button variant="ghost" onClick={onClose}>Cancelar</Button>
-      <Button variant="primary" type="submit" form="contact-form" disabled={!valid}>Guardar cambios</Button>
+      <Button variant="primary" type="submit" form="contact-form" disabled={!valid || check.checking}>{check.checking ? 'Revisando…' : 'Guardar cambios'}</Button>
     </>
   )
 
@@ -290,8 +396,8 @@ function ContactModal({ onClose, contactId }) {
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Nombre del cliente *">
-            <input className={cx(inputCls, duplicate && 'border-rose-400 focus:border-rose-500 focus:ring-rose-200')} value={f.name} onChange={set('name')} required aria-invalid={!!duplicate} />
-            {duplicate && <span className="mt-1 block text-xs text-rose-600">Ya existe otro cliente con ese nombre ({duplicate.name}).</span>}
+            <input className={cx(inputCls, duplicate && 'border-amber-400 focus:border-amber-500 focus:ring-amber-200')} value={f.name} onChange={set('name')} required />
+            {duplicate && <span className="mt-1 block text-xs text-amber-700">Ya existe otro cliente con ese nombre ({duplicate.name}). Puedes continuar si es otra persona.</span>}
           </Field>
           <Field label="Empresa"><input className={inputCls} value={f.company} onChange={set('company')} placeholder="Opcional" /></Field>
           <Field label="Teléfono">
@@ -300,7 +406,10 @@ function ContactModal({ onClose, contactId }) {
               <input className={cx(inputCls, 'rounded-l-none')} inputMode="tel" value={f.phone} onChange={set('phone')} placeholder="999 999 999" />
             </div>
           </Field>
-          <Field label={COUNTRIES[f.country].doc}><input className={inputCls} value={f.doc} onChange={set('doc')} placeholder="Opcional" /></Field>
+          <Field label={COUNTRIES[f.country].doc}>
+            <input className={cx(inputCls, check.docError && 'border-rose-400 focus:border-rose-500 focus:ring-rose-200')} value={f.doc} onChange={set('doc')} placeholder="Opcional" aria-invalid={!!check.docError} />
+            {check.docError && <span className="mt-1 block text-xs text-rose-600">{check.docError}</span>}
+          </Field>
           <Field label="Correo">
             <input className={cx(inputCls, badEmail && 'border-rose-400')} type="email" value={f.email} onChange={set('email')} placeholder="Opcional" aria-invalid={badEmail} />
             {badEmail && <span className="mt-1 block text-xs text-rose-600">Revisa el correo.</span>}
@@ -619,28 +728,52 @@ function SplitModal({ onClose, contactId, alertId }) {
 
 /* ================= Tipo de cambio ================= */
 function RatesModal({ onClose }) {
-  const { data, setRates } = useApp()
+  const { data, setRates, syncRates } = useApp()
   const [r, setR] = useState({ PEN: data.rates.PEN, BOB: data.rates.BOB, VES: data.rates.VES })
+  const [official, setOfficial] = useState(null)
+  const [loading, setLoading] = useState(false)
   const rows = [['PEN', 'PE'], ['BOB', 'BO'], ['VES', 'VE']]
+  const fetchOfficial = async () => {
+    setLoading(true)
+    const res = await syncRates()
+    setLoading(false)
+    if (!res) return
+    setOfficial(Object.fromEntries(res.map((o) => [o.code, o])))
+    setR((x) => ({ ...x, ...Object.fromEntries(res.filter((o) => o.ok && o.code in x).map((o) => [o.code, o.rate])) }))
+  }
   return (
     <Modal
       open
       onClose={onClose}
       title="Tipo de cambio del día"
-      subtitle="Valores referenciales por US$ 1. Se usan para convertir y sumar montos entre países."
+      subtitle="Valores por US$ 1. Se actualizan solos desde el banco central de cada país; aquí puedes traerlos ahora o ajustarlos a mano."
       footer={<><Button variant="ghost" onClick={onClose}>Cancelar</Button><Button variant="primary" onClick={() => { setRates(r); onClose() }}>Guardar</Button></>}
     >
+      <Button className="mb-4 w-full justify-center" onClick={fetchOfficial} disabled={loading}>
+        <RotateCcw size={16} className={loading ? 'animate-spin' : ''} />
+        {loading ? 'Consultando BCRP, BCB y BCV…' : 'Traer tasas oficiales ahora'}
+      </Button>
       <div className="space-y-3">
-        {rows.map(([cur, flag]) => (
-          <label key={cur} className="flex items-center gap-3">
-            <Flag code={flag} />
-            <span className="w-40 text-sm text-slate-700">{CURRENCIES[cur].name}</span>
-            <div className="flex flex-1">
-              <span className="grid w-12 place-items-center rounded-l-lg border border-r-0 border-slate-200 bg-slate-50 text-sm font-medium text-slate-600">{CURRENCIES[cur].symbol}</span>
-              <input type="number" step="0.01" min="0" className={cx(inputCls, 'rounded-l-none tabular-nums')} value={r[cur]} onChange={(e) => setR({ ...r, [cur]: Number(e.target.value) || 0 })} />
+        {rows.map(([cur, flag]) => {
+          const o = official?.[cur]
+          return (
+            <div key={cur}>
+              <label className="flex items-center gap-3">
+                <Flag code={flag} />
+                <span className="w-40 text-sm text-slate-700">{CURRENCIES[cur].name}</span>
+                <div className="flex flex-1">
+                  <span className="grid w-12 place-items-center rounded-l-lg border border-r-0 border-slate-200 bg-slate-50 text-sm font-medium text-slate-600">{CURRENCIES[cur].symbol}</span>
+                  <input type="number" step="0.01" min="0" className={cx(inputCls, 'rounded-l-none tabular-nums')} value={r[cur]} onChange={(e) => setR({ ...r, [cur]: Number(e.target.value) || 0 })} />
+                </div>
+              </label>
+              {o && (
+                <p className={cx('mt-1 text-right text-xs', o.ok ? 'text-slate-500' : 'text-amber-700')}>
+                  {o.ok ? `${o.source} · fecha valor ${o.date}` : `${o.source}: no disponible (${o.error})`}
+                </p>
+              )}
             </div>
-          </label>
-        ))}
+          )
+        })}
       </div>
     </Modal>
   )

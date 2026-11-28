@@ -6,20 +6,11 @@ import type { Temp } from '../../common/validation/schemas.js'
 import { AccessService } from '../../core/access.service.js'
 import { SupabaseService } from '../../core/supabase.service.js'
 import type { TablesInsert, TablesUpdate } from '../../database/database.types.js'
-import { fold } from '../imports/excel/normalize.js'
+import { docKey, nameKey } from '../../common/utils/contact-keys.js'
 import { ContactFilesService } from './contact-files.service.js'
-import type { ActivityBody, ContactListQuery, ContactPatch, CreateContactBody } from './contacts.schemas.js'
+import type { ActivityBody, ContactCheckBody, ContactListQuery, ContactPatch, CreateContactBody } from './contacts.schemas.js'
 
-/** Letra (ya pasada por fold) → clase de regex con sus variantes acentuadas */
-const LETTER_VARIANTS: Record<string, string> = {
-  A: '[aáàäâãÁÀÄÂÃ]',
-  E: '[eéèëêÉÈËÊ]',
-  I: '[iíìïîÍÌÏÎ]',
-  O: '[oóòöôõÓÒÖÔÕ]',
-  U: '[uúùüûÚÙÜÛ]',
-  N: '[nñÑ]',
-  C: '[cçÇ]',
-}
+const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 @Injectable()
 export class ContactsService {
@@ -70,7 +61,7 @@ export class ContactsService {
     const { note, ...fields } = b
     const owner = t.role === 'vendedor' ? t.actorId : (fields.owner ?? t.actorId)
     if (owner !== t.actorId) await this.access.seller(t, owner)
-    await this.assertUniqueName(t, fields.name)
+    await this.assertUniqueDoc(t, fields.country, fields.doc)
     const row = await q(
       db
         .from('contacts')
@@ -89,29 +80,60 @@ export class ContactsService {
   }
 
   /**
-   * No se permiten dos clientes/prospectos con el mismo nombre en la empresa.
-   * Se compara sin mayúsculas, tildes ni espacios sobrantes ("Juan  Pérez" = "juan perez").
+   * Validación previa al guardar (la usa el frontend):
+   * - mismo nombre → solo advertencia, el usuario puede continuar;
+   * - mismo documento oficial en el país (DNI, RUC, cédula…) → no se permite.
    */
-  private async assertUniqueName(t: Tenant, name: string, exceptId?: string) {
-    const key = fold(name)
-    if (!key) return
-    // Regex sin distinguir mayúsculas (~*): cada letra acepta sus variantes con tilde
-    // y los espacios cualquier secuencia; después se confirma con fold()
-    const pattern = `^\\s*${key
-      .split(' ')
-      .map((word) => [...word].map((ch) => LETTER_VARIANTS[ch] ?? ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(''))
-      .join('\\s+')}\\s*$`
+  async check(t: Tenant, b: ContactCheckBody) {
+    const [sameName, doc] = await Promise.all([
+      b.name ? this.findSameName(t, b.name, b.exceptId) : Promise.resolve([]),
+      b.doc && b.country ? this.findSameDoc(t, b.country, b.doc, b.exceptId) : Promise.resolve(null),
+    ])
+    const mine = (r: { owner_id: string | null }) => !t.sellerId || r.owner_id === t.sellerId
+    return {
+      sameName: sameName.map((r) => ({ name: r.name, mine: mine(r) })),
+      docTaken: doc ? { name: mine(doc) ? doc.name : null, doc: doc.doc, mine: mine(doc) } : null,
+    }
+  }
+
+  /** Clientes de la empresa con el mismo nombre (sin distinguir mayúsculas ni espacios sobrantes) */
+  private async findSameName(t: Tenant, name: string, exceptId?: string) {
+    const key = nameKey(name)
+    if (!key) return []
+    // Regex sin distinguir mayúsculas (~*), los espacios aceptan cualquier secuencia; después se confirma con nameKey()
+    const pattern = `^\\s*${key.split(' ').map(escapeRegex).join('\\s+')}\\s*$`
     let query = this.sb.db.from('contacts').select('id, name, owner_id').eq('company_id', t.companyId).filter('name', 'imatch', pattern)
     if (exceptId) query = query.neq('id', exceptId)
     const rows = await this.sb.q(query)
-    const dup = rows.find((r) => fold(r.name) === key)
+    return rows.filter((r) => nameKey(r.name) === key)
+  }
+
+  /** Cliente de la empresa con el mismo documento oficial en ese país (ignora espacios, puntos y guiones) */
+  private async findSameDoc(t: Tenant, country: string, doc: string, exceptId?: string) {
+    const key = docKey(doc)
+    if (!key) return null
+    let query = this.sb.db
+      .from('contacts')
+      .select('id, name, doc, owner_id')
+      .eq('company_id', t.companyId)
+      .eq('country_code', country)
+      .neq('doc', '')
+    if (exceptId) query = query.neq('id', exceptId)
+    const rows = await this.sb.q(query)
+    return rows.find((r) => docKey(r.doc) === key) ?? null
+  }
+
+  /** El documento oficial (DNI, RUC, cédula…) no se puede repetir dentro de un mismo país */
+  private async assertUniqueDoc(t: Tenant, country: string, doc: string, exceptId?: string) {
+    const dup = await this.findSameDoc(t, country, doc, exceptId)
     if (!dup) return
     const mine = !t.sellerId || dup.owner_id === t.sellerId
     throw new ApiError(
       409,
       mine
-        ? `Ya tienes un cliente registrado con el nombre "${dup.name}"`
-        : `Ya existe un cliente con el nombre "${dup.name}", asignado a otro vendedor`,
+        ? `El documento ${dup.doc} ya está registrado para el cliente "${dup.name}"`
+        : `El documento ${dup.doc} ya está registrado para un cliente de otro vendedor`,
+      { code: 'duplicate_doc' },
     )
   }
 
@@ -122,7 +144,11 @@ export class ContactsService {
     // Reasignar el contacto es cosa del gerente
     if (t.role === 'vendedor') delete rest.owner
     else if (rest.owner) await this.access.seller(t, rest.owner)
-    if (rest.name) await this.assertUniqueName(t, rest.name, cid)
+    if (rest.doc !== undefined || rest.country !== undefined) {
+      // Si cambia solo uno de los dos, el otro se toma de lo guardado
+      const cur = await one(db.from('contacts').select('doc, country_code').eq('id', cid).maybeSingle(), 'Contacto')
+      await this.assertUniqueDoc(t, rest.country ?? cur.country_code, rest.doc ?? cur.doc, cid)
+    }
     // La temperatura también se propaga a los tratos abiertos
     if (temp) await this.sb.rpc('set_contact_temp', { p_contact_id: cid, p_temp: temp })
     const patch = M.toRow(rest, M.CONTACT_COLS) as TablesUpdate<'contacts'>

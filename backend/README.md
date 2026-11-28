@@ -109,6 +109,8 @@ npm run start:dev         # desarrollo con recarga: http://localhost:4000/api
 | `REQUIRE_AUTH` | `true` exige `Authorization: Bearer <token de Supabase Auth>` |
 | `DEFAULT_SELLER_ID` | Vendedor por defecto en modo demo (`andres`) |
 | `ALLOW_DEMO_RESET` | Habilita `POST /api/admin/reset`. Por defecto `false` con `NODE_ENV=production` |
+| `RATES_AUTO_SYNC` | Actualiza solo el tipo de cambio desde los bancos centrales (`true`; `false` en pruebas) |
+| `RATES_SYNC_HOURS` | Cada cuántas horas se consulta (`3`) |
 | `SUPABASE_DB_URL` | (Opcional) Conexión Postgres, solo para `npm run gen:types` |
 
 La configuración se valida al arrancar: si falta una variable o tiene un valor inválido, el servidor
@@ -170,6 +172,7 @@ El detalle de cada cuerpo y parámetro está en Swagger (`/api/docs`).
 | PUT | `/api/settings/goal` `{goalUSD}` | `setGoal()` |
 | PATCH | `/api/settings/plan` | `setPlan()` |
 | PATCH | `/api/settings/rates` `{PEN: 3.75}` | `setRates()` |
+| POST | `/api/settings/rates/sync` | Trae el tipo de cambio oficial (BCRP, BCB, BCV) y lo guarda (gerente) |
 | GET / PUT / DELETE | `/api/snoozes[/:itemId]` `{days}` | `snooze()` |
 
 Errores: `{ "error": "mensaje", "details": [...] }` con 400 (validación), 401/403 (auth), 404, 409 (conflicto, p. ej. cuota ya pagada) o 500.

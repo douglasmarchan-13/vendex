@@ -4,7 +4,7 @@ import { CurrentTenant, type Tenant, wholeCompany } from '../../common/auth/tena
 import { id } from '../../common/validation/schemas.js'
 import { ZBody, ZParam, ZQuery } from '../../common/validation/zod.js'
 import {
-  type ActivityBody, activityBody, type ContactListQuery, contactListQuery, type ContactPatch, contactPatch,
+  type ActivityBody, activityBody, type ContactCheckBody, contactCheckBody, type ContactListQuery, contactListQuery, type ContactPatch, contactPatch,
   type CreateContactBody, createContactBody, type TempBody, tempBody,
 } from './contacts.schemas.js'
 import { ContactsService } from './contacts.service.js'
@@ -19,6 +19,16 @@ export class ContactsController {
   @Get()
   list(@CurrentTenant() t: Tenant, @ZQuery(contactListQuery) f: ContactListQuery) {
     return this.contacts.list(t, f)
+  }
+
+  /**
+   * Antes de crear/editar: { sameName: [{ name, mine }], docTaken: { name, doc, mine } | null }.
+   * Nombre repetido = advertencia; documento repetido en el país = el alta/edición responde 409.
+   */
+  @Post('check')
+  @HttpCode(200)
+  check(@CurrentTenant() t: Tenant, @ZBody(contactCheckBody) b: ContactCheckBody) {
+    return this.contacts.check(wholeCompany(t), b)
   }
 
   /** Contacto + timeline + tratos + cuotas */

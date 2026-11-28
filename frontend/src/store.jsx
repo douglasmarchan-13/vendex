@@ -518,6 +518,19 @@ export function AppProvider({ children }) {
         send(() => endpoints.setRates(ok))
         toast('Tipo de cambio actualizado')
       },
+      /** Trae y guarda el tipo de cambio oficial (BCV, BCRP, BCB). Devuelve el detalle por moneda o null si falló. */
+      syncRates: async () => {
+        if (!canManage) return null
+        try {
+          const r = await send(() => endpoints.syncRates())
+          setData((d) => ({ ...d, rates: { ...d.rates, ...r.rates } }))
+          const failed = r.official.filter((o) => !o.ok)
+          toast(failed.length ? `No se pudo leer: ${failed.map((o) => o.source).join(', ')}. Se mantiene el valor anterior.` : 'Tipo de cambio oficial actualizado')
+          return r.official
+        } catch {
+          return null // la cola de envíos ya mostró el error
+        }
+      },
       saveStrategy(item) {
         if (!canManage) return
         const cur = dataRef.current.strategy

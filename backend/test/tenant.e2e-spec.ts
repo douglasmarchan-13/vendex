@@ -100,6 +100,7 @@ describe('vendedor: solo sus registros', () => {
   it('no cambia meta, tipo de cambio, estrategia ni productos (403)', async () => {
     await api().put('/api/settings/goal').set(as('daniela')).send({ goalUSD: 1 }).expect(403)
     await api().patch('/api/settings/rates').set(as('daniela')).send({ PEN: 9 }).expect(403)
+    await api().post('/api/settings/rates/sync').set(as('daniela')).expect(403)
     await api().put('/api/strategy/s1').set(as('daniela')).send({ kind: 'enfoque', title: 'x', body: '' }).expect(403)
     await api().post('/api/catalogs/products').set(as('daniela')).send({ name: 'X', price: 1 }).expect(403)
     await api().get('/api/team/members').set(as('daniela')).expect(403)

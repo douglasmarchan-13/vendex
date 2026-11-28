@@ -1,4 +1,4 @@
-import { Controller, Delete, Get, HttpCode, Patch, Put } from '@nestjs/common'
+import { Controller, Delete, Get, HttpCode, Patch, Post, Put } from '@nestjs/common'
 import { ApiTags } from '@nestjs/swagger'
 import { Roles } from '../../common/auth/auth.decorators.js'
 import { CurrentTenant, type Tenant } from '../../common/auth/tenant.js'
@@ -7,13 +7,17 @@ import { ZBody, ZParam } from '../../common/validation/zod.js'
 import {
   type GoalBody, goalBody, type PlanBody, planBody, type RatesBody, ratesBody, type SnoozeBody, snoozeBody,
 } from './settings.schemas.js'
+import { OfficialRatesService } from './official-rates/official-rates.service.js'
 import { SettingsService } from './settings.service.js'
 
 /** Todos leen la configuración de su empresa; solo el gerente la cambia */
 @ApiTags('settings')
 @Controller('settings')
 export class SettingsController {
-  constructor(private readonly settings: SettingsService) {}
+  constructor(
+    private readonly settings: SettingsService,
+    private readonly officialRates: OfficialRatesService,
+  ) {}
 
   /** Meta, planificador, zona horaria y tipo de cambio */
   @Get()
@@ -40,6 +44,15 @@ export class SettingsController {
   @Patch('rates')
   setRates(@CurrentTenant() t: Tenant, @ZBody(ratesBody) b: RatesBody) {
     return this.settings.setRates(t, b)
+  }
+
+  /** Trae el tipo de cambio de los bancos centrales (BCV, BCRP, BCB) y lo guarda: { ...settings, official: [...] } */
+  @Roles('gerente')
+  @Post('rates/sync')
+  @HttpCode(200)
+  async syncRates(@CurrentTenant() t: Tenant) {
+    const official = await this.officialRates.syncCompany(t.companyId)
+    return { ...(await this.settings.get(t)), official }
   }
 }
 

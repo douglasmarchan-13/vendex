@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common'
 import ExcelJS from 'exceljs'
 import type { Tenant } from '../../common/auth/tenant.js'
 import { ApiError } from '../../common/errors/api-error.js'
+import { docKey } from '../../common/utils/contact-keys.js'
 import { ClockService } from '../../core/clock.service.js'
 import { SupabaseService } from '../../core/supabase.service.js'
 import type { Json } from '../../database/database.types.js'
@@ -182,7 +183,7 @@ export class ImportsService {
       const doc = e.doc.replace(/\s/g, '')
       if (doc.length >= 7 && !byDoc.has(doc)) byDoc.set(doc, e)
     }
-    const matches = parsed.rows.map((d) => (d.doc.length >= 7 ? byDoc.get(d.doc) : undefined) ?? byName.get(personKey(d.name)) ?? null)
+    const matches = parsed.rows.map((d) => (docKey(d.doc).length >= 7 ? byDoc.get(docKey(d.doc)) : undefined) ?? byName.get(personKey(d.name)) ?? null)
     const ids = [...new Set(matches.filter((m): m is ExistingContact => !!m).map((m) => m.id))]
     const { products } = await this.existingDetail(ids)
 
@@ -307,7 +308,8 @@ export class ImportsService {
         const e = p && byPhone.get(phoneKey(p))
         if (e) return e
       }
-      return c.doc.length >= 7 ? (byDoc.get(c.doc) ?? null) : null
+      const doc = docKey(c.doc)
+      return doc.length >= 7 ? (byDoc.get(doc) ?? null) : null
     })
 
     // Lo que ya tienen los contactos existentes, para no duplicar tratos ni notas

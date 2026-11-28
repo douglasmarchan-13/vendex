@@ -163,7 +163,7 @@ export const BASICS = [
   { title: 'Nuevo trato', text: 'El botón azul de arriba (o el + flotante en el celular) registra una oportunidad desde cualquier pantalla.' },
   { title: 'País', text: 'Todos, Perú, Bolivia o Venezuela: filtra clientes, tratos y cobros de todo el sistema.' },
   { title: 'Moneda', text: 'Elige en qué moneda ver los montos. Vendex convierte con el tipo de cambio del día.' },
-  { title: 'Tipo de cambio', text: 'Desde el menú de moneda, "Editar tipo de cambio del día" actualiza las tasas de conversión.', roles: ['gerente'] },
+  { title: 'Tipo de cambio', text: 'Se actualiza solo desde el banco central de cada país (BCRP, BCB y BCV). Desde el menú de moneda, "Editar tipo de cambio del día" permite traerlo al momento o ajustarlo a mano.', roles: ['gerente'] },
   { title: 'Vendedor', text: 'Elige un vendedor para ver todo el sistema solo con sus datos, o "Todos los vendedores".', roles: ['gerente'] },
   { title: 'Campana', text: 'Reúne tus seguimientos de hoy y mañana y los cobros de los próximos días. El número rojo son los urgentes.' },
   { title: 'Ficha del cliente', text: 'Toca el nombre de un cliente en cualquier pantalla para abrir su ficha completa.' },

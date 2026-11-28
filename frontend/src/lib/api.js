@@ -150,6 +150,8 @@ export const endpoints = {
   setTemp: (contactId, temp) => http.put(`/contacts/${enc(contactId)}/temp`, { temp }),
   /** Solo los campos enviados: { name?, company?, country?, city?, region?, phone?, doc?, email?, channel? } */
   updateContact: (contactId, patch) => http.patch(`/contacts/${enc(contactId)}`, patch),
+  /** { name?, country?, doc?, exceptId? } → { sameName: [{ name, mine }], docTaken: { name, doc, mine } | null } */
+  checkContact: (body) => http.post('/contacts/check', body),
   /** 409 si el cliente tiene ventas cerradas o cuotas */
   removeContact: (contactId) => http.del(`/contacts/${enc(contactId)}`),
 
@@ -172,6 +174,8 @@ export const endpoints = {
   setGoal: (goalUSD) => http.put('/settings/goal', { goalUSD }),
   setPlan: (patch) => http.patch('/settings/plan', patch),
   setRates: (rates) => http.patch('/settings/rates', rates),
+  /** Trae el tipo de cambio de los bancos centrales y lo guarda → { rates, official: [{ code, ok, rate, date, source }] } */
+  syncRates: () => http.post('/settings/rates/sync'),
 
   /** Plantillas de WhatsApp del vendedor de la sesión */
   listTemplates: () => http.get('/templates'),
